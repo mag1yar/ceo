@@ -69,7 +69,7 @@ describe("hidden app", () => {
     await browser.waitUntil(
       async () => (await sidebar.getProperty("offsetWidth")) === 0
     )
-    mkdirSync("test-results/app", { recursive: true })
-    await browser.saveScreenshot("test-results/app/offscreen-collapsed.png")
+    mkdirSync("test-results-app", { recursive: true })
+    await browser.saveScreenshot("test-results-app/offscreen-collapsed.png")
   })
 })

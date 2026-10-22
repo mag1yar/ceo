@@ -3,6 +3,15 @@
 use tauri::{ActivationPolicy, App, Builder, Runtime, plugin};
 
 pub fn builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
+    // tao applies the policy only after launch; set Accessory (1) now so LaunchServices never sees a Dock app.
+    unsafe {
+        use objc2::{
+            class, msg_send,
+            runtime::{AnyObject, Bool},
+        };
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: Bool = msg_send![ns_app, setActivationPolicy: 1isize];
+    }
     builder
         .activate_ignoring_other_apps(false)
         .plugin(tauri_plugin_wdio_webdriver::init())

@@ -1,7 +1,7 @@
 /// <reference types="@wdio/mocha-framework" />
-import { type ChildProcess, execSync, spawn } from "node:child_process"
 import { $$, browser, expect } from "@wdio/globals"
 import { cards, recordFrames, summarize } from "../frames"
+import { restartApp } from "./lib/app"
 
 type Invoke = (cmd: string, args?: object) => Promise<unknown>
 
@@ -32,49 +32,6 @@ const same = (a: Record<string, number>, b: Record<string, number>) =>
   Object.keys(b).every((k) => near(a[k], b[k]))
 
 const nodes = cards(300)
-
-// The app process serving our WebDriver port; by port so a sibling worktree's app is never touched.
-const appPid = () =>
-  Number(
-    execSync(`lsof -ti tcp:${browser.options.port} -sTCP:LISTEN`).toString()
-  )
-
-let relaunched: ChildProcess | undefined
-
-// reloadSession keeps the app process the service launched once per run, so restart by killing it and spawning the same binary.
-async function restartApp() {
-  const old = appPid()
-  process.kill(old)
-  await browser.waitUntil(() => {
-    try {
-      process.kill(old, 0)
-      return false
-    } catch {
-      return true
-    }
-  })
-  relaunched = spawn("src-tauri/target/e2e/debug/ceo", [], {
-    env: {
-      ...process.env,
-      HOME: process.env.CEO_E2E_HOME,
-      TAURI_WEBDRIVER_PORT: String(browser.options.port),
-      WDIO_EMBEDDED_SERVER: "true",
-    },
-    stdio: "ignore",
-  })
-  await browser.waitUntil(
-    () =>
-      fetch(`http://127.0.0.1:${browser.options.port}/status`).then(
-        (r) => r.ok,
-        () => false
-      ),
-    { timeout: 30000 }
-  )
-  await browser.reloadSession()
-  // Same explicit switch as wdio.conf `before`, so the service does not probe window focus.
-  await browser.switchToWindow(await browser.getWindowHandle())
-  expect(appPid()).not.toBe(old)
-}
 
 const frameTiming = async (ms: number, pan: boolean) =>
   summarize(await browser.execute(recordFrames, { ms, pan }))
@@ -109,7 +66,6 @@ describe("board in the hidden app", () => {
 
   // Leave the shared store as the other specs expect it; the next worker relaunches the app it finds dead.
   after(async () => {
-    process.once("exit", () => relaunched?.kill())
     await invoke("project_delete", { id: projectId })
   })
 

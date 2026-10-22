@@ -2,9 +2,14 @@ import "@xyflow/react/dist/base.css"
 import { CornersOutIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react"
 import { Button } from "@workspace/ui/components/button"
 import {
+  applyEdgeChanges,
   applyNodeChanges,
+  ConnectionMode,
+  type Edge,
   type Node,
   type OnBeforeDelete,
+  type OnConnect,
+  type OnEdgesChange,
   type OnMove,
   type OnNodesChange,
   Panel,
@@ -12,16 +17,27 @@ import {
   ReactFlowProvider,
   useReactFlow,
   useStore,
+  useStoreApi,
   type Viewport,
 } from "@xyflow/react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 import {
   type BoardChanges,
   type Board as BoardData,
   type BoardNode,
   store,
 } from "@/lib/store"
+import { BoardToolbar } from "./BoardToolbar"
+import { edgeTypes } from "./edgeTypes"
+import { newLink, sameEdge, toBoardEdge, toEdge } from "./link"
 import { nodeTypes } from "./nodeTypes"
+import { newNote } from "./note"
 
 const SAVE_DELAY = 400
 const GRID_GAP = 20
@@ -72,15 +88,18 @@ function Canvas({
   initial: BoardData
 }) {
   const [nodes, setNodes] = useState(() => initial.nodes.map(toNode))
+  const [edges, setEdges] = useState<Edge[]>(() => initial.edges.map(toEdge))
   const [viewport] = useState(() => asViewport(initial.viewport))
   const rf = useReactFlow()
+  const flow = useStoreApi()
 
   // Last persisted state; a flush sends only what differs from it.
   const saved = useRef({
     nodes: new Map(nodes.map((n) => [n.id, toBoard(n)])),
+    edges: new Map(edges.map((e) => [e.id, toBoardEdge(e)])),
     viewport,
   })
-  const latest = useRef({ nodes, viewport })
+  const latest = useRef({ nodes, edges, viewport })
   const timer = useRef<number>(undefined)
   const closed = useRef(false)
 
@@ -88,25 +107,26 @@ function Canvas({
     clearTimeout(timer.current)
     const prev = saved.current
     const next = new Map(latest.current.nodes.map((n) => [n.id, toBoard(n)]))
+    const nextEdges = new Map(
+      latest.current.edges.map((e) => [e.id, toBoardEdge(e)])
+    )
     const vp = latest.current.viewport
     const changes: Partial<BoardChanges> = {}
-    const upsert = [...next.values()].filter(
-      (n) => !sameNode(prev.nodes.get(n.id), n)
-    )
-    const gone = [...prev.nodes.keys()].filter((id) => !next.has(id))
-    if (upsert.length) changes.upsertNodes = upsert
-    if (gone.length) changes.deleteNodeIds = gone
+    const nodeDiff = diff(prev.nodes, next, sameNode)
+    const edgeDiff = diff(prev.edges, nextEdges, sameEdge)
+    if (nodeDiff.upsert.length) changes.upsertNodes = nodeDiff.upsert
+    if (nodeDiff.gone.length) changes.deleteNodeIds = nodeDiff.gone
+    if (edgeDiff.upsert.length) changes.upsertEdges = edgeDiff.upsert
+    if (edgeDiff.gone.length) changes.deleteEdgeIds = edgeDiff.gone
     if (vp && !sameViewport(prev.viewport, vp)) changes.viewport = vp
     if (Object.keys(changes).length === 0) return
-    saved.current = { nodes: next, viewport: vp }
+    saved.current = { nodes: next, edges: nextEdges, viewport: vp }
     store.saveBoard(projectId, changes).catch((e) => {
       console.error("board save failed", e)
       // Put this batch's entries back to what the store still holds, then retry.
       const now = saved.current
-      for (const id of [...upsert.map((n) => n.id), ...gone]) {
-        const old = prev.nodes.get(id)
-        old ? now.nodes.set(id, old) : now.nodes.delete(id)
-      }
+      revert(now.nodes, prev.nodes, nodeDiff)
+      revert(now.edges, prev.edges, edgeDiff)
       if (changes.viewport) now.viewport = prev.viewport
       if (!closed.current) timer.current = window.setTimeout(flush, SAVE_DELAY)
     })
@@ -119,8 +139,9 @@ function Canvas({
 
   useEffect(() => {
     latest.current.nodes = nodes
+    latest.current.edges = edges
     schedule()
-  }, [nodes, schedule])
+  }, [nodes, edges, schedule])
 
   useEffect(() => {
     closed.current = false
@@ -140,47 +161,112 @@ function Canvas({
     [schedule]
   )
 
-  // Undo history: snapshots of the node list taken before each move gesture and delete.
-  const past = useRef<Node[][]>([])
-  const future = useRef<Node[][]>([])
+  // Undo history: snapshots of nodes and edges taken before each gesture, edit, create and delete.
+  const past = useRef<Snapshot[]>([])
+  const future = useRef<Snapshot[]>([])
   const moving = useRef(false)
   const record = useCallback(() => {
-    past.current = [...past.current.slice(-99), latest.current.nodes]
+    const { nodes, edges } = latest.current
+    past.current = [...past.current.slice(-99), { nodes, edges }]
     future.current = []
   }, [])
   const onBeforeDelete: OnBeforeDelete = useCallback(
-    async ({ nodes }) => {
-      if (nodes.length) record()
+    async ({ nodes, edges }) => {
+      if (nodes.length || edges.length) record()
       return true
     },
     [record]
   )
 
-  // A drag streams dragging:true changes and ends with dragging:false; an arrow-key nudge is a lone dragging:false.
+  // A drag or resize streams dragging/resizing:true changes and ends with false; an arrow-key nudge is a lone dragging:false.
+  // Replace changes are data edits (note text, colour, edge label), one per editing session.
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
-      const moves = changes.filter((c) => c.type === "position")
-      if (moves.length) {
+      const gesture = changes.filter(
+        (c) =>
+          c.type === "position" ||
+          (c.type === "dimensions" && c.resizing !== undefined)
+      )
+      if (gesture.length) {
         if (!moving.current) record()
-        moving.current = moves.some((c) => c.dragging)
+        moving.current = gesture.some(
+          (c) =>
+            (c.type === "position" && c.dragging) ||
+            (c.type === "dimensions" && c.resizing)
+        )
       }
+      if (changes.some((c) => c.type === "replace")) record()
       setNodes((ns) => applyNodeChanges(changes, ns))
     },
     [record]
   )
 
+  const onEdgesChange: OnEdgesChange = useCallback(
+    (changes) => {
+      if (changes.some((c) => c.type === "replace")) record()
+      setEdges((es) => applyEdgeChanges(changes, es))
+    },
+    [record]
+  )
+
+  const onConnect: OnConnect = useCallback(
+    (c) => {
+      const link = newLink(c)
+      const twin = latest.current.edges.some(
+        (e) =>
+          e.source === link.source &&
+          e.target === link.target &&
+          e.sourceHandle === link.sourceHandle &&
+          e.targetHandle === link.targetHandle
+      )
+      if (c.source === c.target || twin) return
+      record()
+      setEdges((es) => [...es, link])
+    },
+    [record]
+  )
+
+  const addNote = useCallback(
+    (at: { x: number; y: number }) => {
+      const note = newNote(at)
+      record()
+      setNodes((ns) => [...ns, note])
+    },
+    [record]
+  )
+  const addNoteAtCenter = useCallback(() => {
+    const { width, height, transform } = flow.getState()
+    const [x, y, zoom] = transform
+    addNote({ x: (width / 2 - x) / zoom, y: (height / 2 - y) / zoom })
+  }, [addNote, flow])
+  const onDoubleClick = useCallback(
+    (e: MouseEvent) => {
+      if ((e.target as Element).classList.contains("react-flow__pane"))
+        addNote(rf.screenToFlowPosition({ x: e.clientX, y: e.clientY }))
+    },
+    [addNote, rf]
+  )
+
   useEffect(() => {
-    const step = (from: Node[][], to: Node[][]) => {
+    const step = (from: Snapshot[], to: Snapshot[]) => {
       const snapshot = from.pop()
       if (!snapshot) return
-      to.push(latest.current.nodes)
-      latest.current.nodes = snapshot
-      setNodes(snapshot)
+      const { nodes, edges } = latest.current
+      to.push({ nodes, edges })
+      Object.assign(latest.current, snapshot)
+      setNodes(snapshot.nodes)
+      setEdges(snapshot.edges)
     }
+    // A bare letter must not fire from a sidebar menu's typeahead, only from the board or nothing focused.
+    const onBoard = (t: EventTarget | null) =>
+      t === document.body ||
+      (t instanceof Node && !!flow.getState().domNode?.contains(t))
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTyping(e.target)) return
       if (e.shiftKey && !e.metaKey && e.code === "Digit1") rf.fitView()
       else if (e.metaKey && !e.shiftKey && e.code === "Digit0") rf.zoomTo(1)
+      else if (e.code === "KeyN" && !e.repeat && plain(e) && onBoard(e.target))
+        addNoteAtCenter()
       else if (e.metaKey && e.code === "KeyZ")
         e.shiftKey
           ? step(future.current, past.current)
@@ -190,13 +276,19 @@ function Canvas({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [rf])
+  }, [rf, flow, addNoteAtCenter])
 
   return (
     <ReactFlow
       nodes={nodes}
+      edges={edges}
       onNodesChange={onNodesChange}
+      onEdgesChange={onEdgesChange}
+      onConnect={onConnect}
+      connectionMode={ConnectionMode.Loose}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
+      onDoubleClick={onDoubleClick}
       defaultViewport={viewport}
       fitView={!viewport}
       minZoom={0.1}
@@ -211,10 +303,11 @@ function Canvas({
       onMoveEnd={onMoveEnd}
       onBeforeDelete={onBeforeDelete}
       attributionPosition="bottom-left"
-      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)]"
+      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)] [--xy-edge-stroke:var(--muted-foreground)] [--xy-edge-stroke-selected:var(--primary)] [--xy-edge-stroke-width:1.5] [--xy-connectionline-stroke:var(--primary)] [--xy-connectionline-stroke-width:1.5]"
     >
       <DotGrid />
       <ZoomControls />
+      <BoardToolbar onAddNote={addNoteAtCenter} />
     </ReactFlow>
   )
 }
@@ -325,6 +418,32 @@ const sameNode = (a: BoardNode | undefined, b: BoardNode) =>
   a.type === b.type &&
   a.data === b.data
 
+type Snapshot = { nodes: Node[]; edges: Edge[] }
+
+function diff<T>(
+  prev: Map<string, T>,
+  next: Map<string, T>,
+  same: (a: T | undefined, b: T) => boolean
+) {
+  return {
+    upsert: [...next]
+      .filter(([id, v]) => !same(prev.get(id), v))
+      .map(([, v]) => v),
+    gone: [...prev.keys()].filter((id) => !next.has(id)),
+  }
+}
+
+function revert<T extends { id: string }>(
+  now: Map<string, T>,
+  prev: Map<string, T>,
+  { upsert, gone }: { upsert: T[]; gone: string[] }
+) {
+  for (const id of [...upsert.map((v) => v.id), ...gone]) {
+    const old = prev.get(id)
+    old ? now.set(id, old) : now.delete(id)
+  }
+}
+
 const sameViewport = (a: Viewport | undefined, b: Viewport) =>
   !!a && a.x === b.x && a.y === b.y && a.zoom === b.zoom
 
@@ -332,6 +451,9 @@ function asViewport(v: unknown): Viewport | undefined {
   const { x, y, zoom } = (v ?? {}) as Partial<Viewport>
   return [x, y, zoom].every(Number.isFinite) ? (v as Viewport) : undefined
 }
+
+const plain = (e: KeyboardEvent) =>
+  !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
 
 const mod = (v: number, m: number) => ((v % m) + m) % m
 

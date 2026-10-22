@@ -265,3 +265,21 @@
     background: color-mix(in oklch, var(--primary) 25%, transparent);
   }
 }
+
+/* Note colours for the board (#6); the default note uses --card. */
+:root {
+  --note-yellow: oklch(0.96 0.06 95);
+  --note-green: oklch(0.95 0.045 150);
+  --note-blue: oklch(0.95 0.035 250);
+  --note-purple: oklch(0.95 0.04 300);
+  --note-pink: oklch(0.95 0.04 355);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --note-yellow: oklch(0.34 0.05 95);
+    --note-green: oklch(0.32 0.045 150);
+    --note-blue: oklch(0.32 0.05 255);
+    --note-purple: oklch(0.32 0.055 300);
+    --note-pink: oklch(0.32 0.055 355);
+  }
+}

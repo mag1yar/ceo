@@ -1,7 +1,7 @@
 /// <reference types="@wdio/mocha-framework" />
 import { $, $$, browser, expect } from "@wdio/globals"
 import type { Board } from "../../src/lib/store"
-import { restartApp } from "./lib/app"
+import { alive, restartApp } from "./lib/app"
 import { invoke, type Project } from "./lib/projects"
 
 const notes = () => $$(".react-flow__node-note")
@@ -10,6 +10,8 @@ type MenuEntry = { menu: string; title: string; key: string }
 
 // The app dies inside the call that quits it, so a dropped connection is the expected answer.
 const quietly = (call: Promise<unknown>) => call.catch(() => undefined)
+
+const cmdQ = () => invoke("e2e_key", { chars: "q", keyCode: 12, shift: false })
 
 const menuItem = async (key: string) => {
   const entries = await invoke<MenuEntry[]>("e2e_menu")
@@ -48,10 +50,7 @@ describe("quitting the hidden app", () => {
         return invoke("e2e_menu_click", { menu, item: title })
       },
     ],
-    [
-      "Cmd+Q",
-      () => invoke("e2e_key", { chars: "q", keyCode: 12, shift: false }),
-    ],
+    ["Cmd+Q", cmdQ],
     ["closing the window", () => invoke("e2e_close_window")],
   ]
 
@@ -67,4 +66,27 @@ describe("quitting the hidden app", () => {
       expect(b.nodes.filter((n) => n.type === "note")).toHaveLength(count + 1)
     })
   }
+})
+
+describe("quitting with no project open", () => {
+  before(async () => {
+    for (const p of await invoke<Project[]>("project_list"))
+      await invoke("project_delete", { id: p.id })
+    await browser.execute(() => location.reload())
+    await $("h2=Start with a project folder").waitForExist({ timeout: 20000 })
+  })
+
+  // No board answers app://flush, so only the app-level listener keeps this short of the 1.5 s bound.
+  it("quits without waiting for a board", async () => {
+    let took = 0
+    await restartApp(async (pid) => {
+      const start = Date.now()
+      // Not awaited: WebDriver retries the dropped call for about 1.5 s before it fails.
+      const call = quietly(cmdQ())
+      await browser.waitUntil(() => !alive(pid), { interval: 20 })
+      took = Date.now() - start
+      await call
+    })
+    expect(took).toBeLessThan(1000)
+  })
 })

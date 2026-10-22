@@ -1,7 +1,5 @@
 import "@xyflow/react/dist/base.css"
 import { CornersOutIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react"
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
 import { Button } from "@workspace/ui/components/button"
 import {
   applyEdgeChanges,
@@ -48,6 +46,7 @@ import { LinkConnectionLine } from "./LinkEdge"
 import { newLink, sameEdge, toBoardEdge, toEdge } from "./link"
 import { nodeTypes } from "./nodeTypes"
 import { newNote } from "./note"
+import { onQuit } from "./quit"
 
 const SAVE_DELAY = 400
 const GRID_GAP = 20
@@ -113,6 +112,8 @@ function Canvas({
   const latest = useRef({ nodes, edges, viewport })
   const timer = useRef<number>(undefined)
   const closed = useRef(false)
+  // Settles once every save started so far has, so a quit never cuts one short.
+  const saving = useRef<Promise<unknown>>(Promise.resolve())
 
   const flush = useCallback(() => {
     clearTimeout(timer.current)
@@ -130,9 +131,9 @@ function Canvas({
     if (edgeDiff.upsert.length) changes.upsertEdges = edgeDiff.upsert
     if (edgeDiff.gone.length) changes.deleteEdgeIds = edgeDiff.gone
     if (vp && !sameViewport(prev.viewport, vp)) changes.viewport = vp
-    if (Object.keys(changes).length === 0) return Promise.resolve()
+    if (Object.keys(changes).length === 0) return saving.current
     saved.current = { nodes: next, edges: nextEdges, viewport: vp }
-    return store.saveBoard(projectId, changes).catch((e) => {
+    const save = store.saveBoard(projectId, changes).catch((e) => {
       console.error("board save failed", e)
       // Put this batch's entries back to what the store still holds, then retry.
       const now = saved.current
@@ -141,6 +142,8 @@ function Canvas({
       if (changes.viewport) now.viewport = prev.viewport
       if (!closed.current) timer.current = window.setTimeout(flush, SAVE_DELAY)
     })
+    saving.current = Promise.all([saving.current, save])
+    return saving.current
   }, [projectId])
 
   const schedule = useCallback(() => {
@@ -157,13 +160,10 @@ function Canvas({
   useEffect(() => {
     closed.current = false
     window.addEventListener("pagehide", flush)
-    // Rust holds the quit until this batch is on disk (or its time bound passes).
-    const quit = listen("app://flush", () =>
-      flush().finally(() => invoke("app_flush_done"))
-    )
+    const offQuit = onQuit(flush)
     return () => {
       window.removeEventListener("pagehide", flush)
-      quit.then((off) => off())
+      offQuit()
       closed.current = true
       flush()
     }

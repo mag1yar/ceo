@@ -32,6 +32,7 @@ import { AgentTerminals, focusedId } from "@/features/agents/AgentTerminals"
 import { useIsValidConnection } from "@/features/agents/canConnect"
 import { useCommand } from "@/features/commands/registry"
 import { newDiagram } from "@/features/diagrams/diagram"
+import { SignalLayer } from "@/features/messages/SignalLayer"
 import {
   type BoardChanges,
   type Board as BoardData,
@@ -328,6 +329,7 @@ function Canvas({
       <BoardToolbar onAddNote={addNoteAtCenter} onAddDiagram={addDiagram} />
       <AgentInspector />
       <AgentTerminals projectId={projectId} />
+      <SignalLayer projectId={projectId} />
       {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
     </ReactFlow>
   )

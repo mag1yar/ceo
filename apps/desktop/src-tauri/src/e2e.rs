@@ -164,3 +164,52 @@ pub fn e2e_key<R: Runtime>(
         "first responder {responder}, window took it: {window_took}, menu took it directly: {menu_took}"
     ))
 }
+
+/// A plain key or a left click handed straight to the webview, as AppKit routes them in a key window, without activating the app.
+#[tauri::command]
+pub fn e2e_input<R: Runtime>(
+    app: AppHandle<R>,
+    kind: String,
+    key_code: u16,
+    chars: String,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("no main window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())?;
+    // SAFETY: Tauri hands out the live NSWindow of the main webview window.
+    let ns_window: &NSWindow = unsafe { &*(ns_window as *const NSWindow) };
+    let webview = ns_window.firstResponder().ok_or("no first responder")?;
+    let number = ns_window.windowNumber();
+    let none = NSEventModifierFlags::empty();
+    let text = NSString::from_str(&chars);
+    let key = |kind| {
+        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            kind, NSPoint::new(0.0, 0.0), none, 0.0, number, None, &text, &text, false, key_code,
+        )
+        .ok_or("could not build the key event")
+    };
+    // Page points from the top left; AppKit counts window points from the bottom left.
+    let height = ns_window
+        .contentRectForFrameRect(ns_window.frame())
+        .size
+        .height;
+    let mouse = |kind| {
+        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            kind, NSPoint::new(x, height - y), none, 0.0, number, None, 0, 1, 1.0,
+        )
+        .ok_or("could not build the mouse event")
+    };
+    match kind.as_str() {
+        "key" => {
+            webview.keyDown(&*key(NSEventType::KeyDown)?);
+            webview.keyUp(&*key(NSEventType::KeyUp)?);
+        }
+        "click" => {
+            webview.mouseDown(&*mouse(NSEventType::LeftMouseDown)?);
+            webview.mouseUp(&*mouse(NSEventType::LeftMouseUp)?);
+        }
+        _ => return Err(format!("unknown input {kind}")),
+    }
+    Ok(())
+}

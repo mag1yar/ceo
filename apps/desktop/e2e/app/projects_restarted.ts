@@ -14,8 +14,9 @@ describe("projects after a restart", () => {
     await browser.waitUntil(async () => (await rowNames()).length === 3)
     expect(await rowNames()).toEqual(["gamma", "alpha", "beta"])
     await expect(row("gamma")).toHaveAttribute("aria-current", "page")
-    await expect($("[data-slot=main-content]")).toHaveText(
-      expect.stringContaining(folder("gamma"))
+    await expect($("[data-slot=main-header] h1")).toHaveAttribute(
+      "title",
+      folder("gamma")
     )
   })
 })

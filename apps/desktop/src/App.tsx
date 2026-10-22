@@ -8,8 +8,8 @@ import {
   SidebarHeader,
   SidebarTrigger,
 } from "@workspace/ui/components/app-shell"
+import { Board } from "@/features/board/Board"
 import { ProjectList } from "@/features/projects/ProjectList"
-import { ProjectPlaceholder } from "@/features/projects/ProjectPlaceholder"
 import { ProjectsEmpty } from "@/features/projects/ProjectsEmpty"
 import { Projects, useProjects } from "@/features/projects/projects"
 
@@ -25,7 +25,7 @@ export function App() {
         </Sidebar>
         <Main>
           <MainHeader>
-            <h1 className="text-sm font-semibold">CEO</h1>
+            <ProjectTitle />
           </MainHeader>
           <ActiveProject />
         </Main>
@@ -35,14 +35,22 @@ export function App() {
   )
 }
 
+function ProjectTitle() {
+  const { projects, activeId } = useProjects()
+  const project = projects?.find((p) => p.id === activeId)
+  return (
+    <h1 className="truncate text-sm font-semibold" title={project?.path}>
+      {project?.name ?? "CEO"}
+    </h1>
+  )
+}
+
 function ActiveProject() {
   const { projects, activeId: projectId } = useProjects()
   return (
     <MainContent>
       {projects?.length === 0 && <ProjectsEmpty />}
-      {projectId && (
-        <ProjectPlaceholder key={projectId} projectId={projectId} />
-      )}
+      {projectId && <Board key={projectId} projectId={projectId} />}
     </MainContent>
   )
 }

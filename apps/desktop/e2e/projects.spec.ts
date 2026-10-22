@@ -39,7 +39,7 @@ test("projects: add, rename, reorder, switch and remove", async ({
   await page.getByRole("button", { name: "Add project" }).click()
   await expect(names).toHaveText(["alpha"])
   await expect(rows.first()).toHaveAttribute("aria-current", "page")
-  await expect(main).toContainText("/Users/me/code/alpha")
+  await expect(main.locator(".react-flow")).toBeVisible()
 
   await nextFolder(page, "/Users/me/notes")
   await page.getByRole("button", { name: "Add project" }).click()
@@ -80,7 +80,10 @@ test("projects: add, rename, reorder, switch and remove", async ({
     "aria-current",
     "page"
   )
-  await expect(main).toContainText("/Users/me/notes")
+  await expect(page.locator("[data-slot=main-header] h1")).toHaveAttribute(
+    "title",
+    "/Users/me/notes"
+  )
 
   // Pointer steps a frame apart, as a hand moves: motion reads drags once per frame.
   const from = await rows.nth(0).boundingBox()
@@ -114,5 +117,5 @@ test("projects: add, rename, reorder, switch and remove", async ({
     "aria-current",
     "page"
   )
-  await expect(main).toContainText("/Users/me/code/alpha")
+  await expect(main.locator(".react-flow")).toBeVisible()
 })

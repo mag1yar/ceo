@@ -20,7 +20,7 @@ function invoke(cmd: string, args: object = {}) {
 describe("hidden app", () => {
   it("loads the shell", async () => {
     await expect($("[data-slot=app-shell]")).toExist()
-    await expect($("h1=CEO")).toExist()
+    await expect($("[data-slot=main-header] h1")).toExist()
   })
 
   it("persists a project and its board through the real store", async () => {

@@ -10,6 +10,15 @@
     "test": {},
     "clippy": {},
     "test:rust": {},
+    "test:e2e": {
+      "dependsOn": ["^typecheck"],
+      "passThroughEnv": ["E2E_PORT"],
+      "outputs": ["test-results/**"]
+    },
+    "test:e2e:app": {
+      "cache": false,
+      "passThroughEnv": ["TAURI_WEBDRIVER_PORT"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

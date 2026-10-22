@@ -1,9 +1,18 @@
+#[cfg(feature = "e2e")]
+mod e2e;
 mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| store::init(app))
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "e2e")]
+    let builder = e2e::builder(builder);
+    builder
+        .setup(|app| {
+            #[cfg(feature = "e2e")]
+            e2e::setup(app);
+            store::init(app)
+        })
         .invoke_handler(tauri::generate_handler![
             store::project_list,
             store::project_create,

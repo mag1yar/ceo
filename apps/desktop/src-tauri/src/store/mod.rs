@@ -287,4 +287,6 @@ pub fn board_save(s: State<Store>, project_id: String, changes: BoardChanges) ->
 }
 
 #[cfg(test)]
+mod ipc_tests;
+#[cfg(test)]
 mod tests;

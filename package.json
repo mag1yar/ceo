@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "turbo run dev",
-    "gate": "turbo run check typecheck test clippy test:rust"
+    "gate": "turbo run check typecheck test clippy test:rust test:e2e",
+    "test:e2e": "turbo run test:e2e",
+    "test:e2e:app": "turbo run test:e2e:app"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

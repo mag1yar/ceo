@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "identifier": "app.ceo.desktop.e2e",
+  "app": {
+    "windows": [
+      {
+        "title": "CEO",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "x": -20000,
+        "y": 0,
+        "focus": false,
+        "visible": false,
+        "incognito": true,
+        "preventOverflow": false,
+        "decorations": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 26 },
+        "transparent": true,
+        "windowEffects": {
+          "effects": ["sidebar"],
+          "state": "followsWindowActiveState"
+        }
+      }
+    ]
+  }
+}

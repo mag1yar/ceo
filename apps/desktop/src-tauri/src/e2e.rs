@@ -213,3 +213,20 @@ pub fn e2e_input<R: Runtime>(
     }
     Ok(())
 }
+
+/// The red close button's path: AppKit asks the window delegate `windowShouldClose:` (`performClose:` only beeps in a borderless window).
+#[tauri::command]
+pub fn e2e_close_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    use objc2::{
+        msg_send,
+        runtime::{AnyObject, Bool},
+    };
+    let window = app.get_webview_window("main").ok_or("no main window")?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as *mut AnyObject;
+    // SAFETY: Tauri hands out the live NSWindow; tao's delegate implements windowShouldClose:.
+    unsafe {
+        let delegate: *mut AnyObject = msg_send![ns_window, delegate];
+        let _: Bool = msg_send![delegate, windowShouldClose: ns_window];
+    }
+    Ok(())
+}

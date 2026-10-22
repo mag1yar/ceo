@@ -11,15 +11,17 @@ let relaunched: ChildProcess | undefined
 // The next worker relaunches the app it finds dead.
 process.once("exit", () => relaunched?.kill())
 
-// reloadSession keeps the app process the service launched once per run, so restart by killing it and spawning the same binary.
-export async function restartApp() {
+// reloadSession keeps the app process the service launched once per run, so restart by ending it (kill by default) and spawning the same binary.
+export async function restartApp(
+  quit: (pid: number) => unknown = (pid) => process.kill(pid)
+) {
   // The webview's recorded CSP violations die with the process, so report them first.
   const seen = await browser.execute(() =>
     sessionStorage.getItem("ceo-e2e-csp")
   )
   if (seen) throw new Error(`CSP violations: ${seen}`)
   const old = appPid()
-  process.kill(old)
+  await quit(old)
   await browser.waitUntil(() => {
     try {
       process.kill(old, 0)

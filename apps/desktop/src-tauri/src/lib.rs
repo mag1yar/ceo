@@ -1,6 +1,7 @@
 #[cfg(feature = "e2e")]
 mod e2e;
 mod git;
+mod quit;
 mod sessions;
 mod store;
 mod terminal;
@@ -48,6 +49,7 @@ pub fn run() {
             sessions::session_ensure,
             sessions::session_delete,
             sessions::session_list,
+            quit::app_flush_done,
             #[cfg(feature = "e2e")]
             e2e::e2e_menu,
             #[cfg(feature = "e2e")]
@@ -56,10 +58,13 @@ pub fn run() {
             e2e::e2e_key,
             #[cfg(feature = "e2e")]
             e2e::e2e_input,
+            #[cfg(feature = "e2e")]
+            e2e::e2e_close_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
+            quit::on_event(app, &event);
             if let tauri::RunEvent::Exit = event {
                 app.state::<terminal::Terminals>().close_all();
             }

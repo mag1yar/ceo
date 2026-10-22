@@ -10,6 +10,7 @@ import {
 } from "@workspace/ui/components/app-shell"
 import { useEffect } from "react"
 import { Board } from "@/features/board/Board"
+import { Commands } from "@/features/commands/Commands"
 import { ProjectList } from "@/features/projects/ProjectList"
 import { ProjectsEmpty } from "@/features/projects/ProjectsEmpty"
 import { Projects, useProjects } from "@/features/projects/projects"
@@ -32,6 +33,7 @@ export function App() {
           <ActiveProject />
         </Main>
         <SidebarTrigger />
+        <Commands />
       </AppShell>
     </Projects>
   )

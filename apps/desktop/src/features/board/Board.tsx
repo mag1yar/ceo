@@ -30,6 +30,7 @@ import {
 import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
 import { AgentTerminals, focusedId } from "@/features/agents/AgentTerminals"
 import { useIsValidConnection } from "@/features/agents/canConnect"
+import { useCommand } from "@/features/commands/registry"
 import { newDiagram } from "@/features/diagrams/diagram"
 import {
   type BoardChanges,
@@ -265,36 +266,33 @@ function Canvas({
     [addNote, rf]
   )
 
-  useEffect(() => {
-    const step = (from: Snapshot[], to: Snapshot[]) => {
-      const snapshot = from.pop()
-      if (!snapshot) return
-      const { nodes, edges } = latest.current
-      to.push({ nodes, edges })
-      Object.assign(latest.current, snapshot)
-      setNodes(snapshot.nodes)
-      setEdges(snapshot.edges)
-    }
-    // A bare letter must not fire from a sidebar menu's typeahead, only from the board or nothing focused.
-    const onBoard = (t: EventTarget | null) =>
-      t === document.body ||
-      (t instanceof Node && !!flow.getState().domNode?.contains(t))
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isTyping(e.target)) return
-      if (e.shiftKey && !e.metaKey && e.code === "Digit1") rf.fitView()
-      else if (e.metaKey && !e.shiftKey && e.code === "Digit0") rf.zoomTo(1)
-      else if (e.code === "KeyN" && !e.repeat && plain(e) && onBoard(e.target))
-        addNoteAtCenter()
-      else if (e.metaKey && e.code === "KeyZ")
-        e.shiftKey
-          ? step(future.current, past.current)
-          : step(past.current, future.current)
-      else return
-      e.preventDefault()
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [rf, flow, addNoteAtCenter])
+  const step = useCallback((from: Snapshot[], to: Snapshot[]) => {
+    const snapshot = from.pop()
+    if (!snapshot) return
+    const { nodes, edges } = latest.current
+    to.push({ nodes, edges })
+    Object.assign(latest.current, snapshot)
+    setNodes(snapshot.nodes)
+    setEdges(snapshot.edges)
+  }, [])
+  useCommand(
+    "board.undo",
+    useCallback(() => step(past.current, future.current), [step])
+  )
+  useCommand(
+    "board.redo",
+    useCallback(() => step(future.current, past.current), [step])
+  )
+  useCommand(
+    "board.fit",
+    useCallback(() => rf.fitView(), [rf])
+  )
+  useCommand(
+    "board.zoom100",
+    useCallback(() => rf.zoomTo(1), [rf])
+  )
+  useCommand("note.new", addNoteAtCenter)
+  useCommand("diagram.new", addDiagram)
 
   return (
     <ReactFlow
@@ -475,11 +473,4 @@ function asViewport(v: unknown): Viewport | undefined {
   return [x, y, zoom].every(Number.isFinite) ? (v as Viewport) : undefined
 }
 
-const plain = (e: KeyboardEvent) =>
-  !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey
-
 const mod = (v: number, m: number) => ((v % m) + m) % m
-
-const isTyping = (t: EventTarget | null) =>
-  t instanceof HTMLElement &&
-  (t.isContentEditable || t.matches("input, textarea, select"))

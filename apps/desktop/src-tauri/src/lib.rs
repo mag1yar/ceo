@@ -41,6 +41,12 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_close,
+            #[cfg(feature = "e2e")]
+            e2e::e2e_menu,
+            #[cfg(feature = "e2e")]
+            e2e::e2e_menu_click,
+            #[cfg(feature = "e2e")]
+            e2e::e2e_key,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

@@ -37,7 +37,7 @@ A native macOS work tool in the line of Claude desktop and Orca: calm, dense, qu
 ```
 
 - `AppShell` owns the state (collapsed, width) and exposes it through `useAppShell()`. It sets `data-sidebar="expanded|collapsed"` and `--sidebar-width` on the root; children style themselves with `group-data-[sidebar=collapsed]/shell:`.
-- Cmd+B toggles the sidebar (Cmd only: Ctrl+B is the tmux prefix in terminals). The trigger sits right of the traffic lights in both states, like Finder and Claude desktop.
+- Cmd+B toggles the sidebar through the command registry (Cmd only: Ctrl+B is the tmux prefix in terminals). The trigger sits right of the traffic lights in both states, like Finder and Claude desktop.
 - The sidebar resizes by dragging its right edge (200 to 400px, default 256). During a drag the width is written straight to the CSS variable and committed on release. Double-click the edge resets the width; the edge is a focusable `separator`, arrow keys move it by 16px.
 - Width and collapsed state persist in `localStorage` (`ceo.sidebar.width`, `ceo.sidebar.collapsed`) until the storage task replaces it.
 - Slots for later work: project list in `SidebarContent` (#4), board in `MainContent` (#5).
@@ -99,6 +99,15 @@ Hierarchy comes from weight and opacity before size: section labels are 11px sem
 The sidebar collapse animates width and the header inset with `--ease-spring` over `--duration-move`; the sidebar content fades with `--ease-out` over `--duration-base`. A fixed inner width means content clips instead of reflowing. CSS transitions, not keyframes, so a second Cmd+B mid-flight retargets from the current value. Resizing turns transitions off so the edge tracks the pointer 1:1.
 
 `prefers-reduced-motion: reduce` sets `--duration-move` to 0: the sidebar snaps, fades remain.
+
+## Commands and shortcuts
+
+Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`, lists every app command with its id, title, group, icon and shortcuts. The keyboard listener, the Cmd+K palette, the help dialog (`?` or Cmd+/) and the macOS menu bar all read it; components bind run functions with `useCommand(id, run)`, and a command without one is unavailable.
+
+- Shortcuts match the physical key (`code`), so they work on any layout. They do nothing while the keyboard is in an input, a textarea (the note and diagram editors, xterm's helper), a contenteditable, a menu or an open dialog. The focus mode keys from #15 are the exception and work inside the focused terminal.
+- The menu bar is built in JS with `@tauri-apps/api/menu`: the standard App, Edit and Window menus, plus one menu per registry group. Only Cmd shortcuts become accelerators. Undo and Redo stay the native Edit items so text fields keep their own undo.
+- Measured in the hidden app (#10): WebKit gives the page the keydown first; a cancelled key never reaches the menu, an uncancelled one (Cmd+K in a terminal) is handed on to the menu afterwards. A menu action therefore stands down when the page saw its keys in the last 500ms.
+- The palette opens and closes without animation (it is opened by keyboard many times a day) and moving through its rows is instant. The help dialog keeps the standard 100ms fade and drops its scale under reduced motion.
 
 ## Icons
 

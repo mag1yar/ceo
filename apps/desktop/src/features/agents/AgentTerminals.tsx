@@ -6,6 +6,7 @@ import {
   type Viewport,
 } from "@xyflow/react"
 import { useEffect, useSyncExternalStore } from "react"
+import { useCommand } from "@/features/commands/registry"
 import { useProjects } from "@/features/projects/projects"
 import { syncTerminals } from "@/features/terminal/terminals"
 import { isAgent } from "./agent"
@@ -18,7 +19,9 @@ const MARGIN = { x: 16, top: 56, bottom: 64 }
 type Focus = { id: string; size: { width: number; height: number } }
 let focus: Focus | undefined
 const listeners = new Set<() => void>()
-let controller: ((id: string | undefined) => void) | undefined
+let controller:
+  | { go: (id: string | undefined) => void; step: (by: number) => void }
+  | undefined
 
 function setFocus(next: Focus | undefined) {
   focus = next
@@ -40,8 +43,12 @@ export const useFocusedId = () =>
 
 // The header button and double click: focus this agent, or leave focus if it already has it.
 export function toggleFocus(id: string) {
-  controller?.(focus?.id === id ? undefined : id)
+  controller?.go(focus?.id === id ? undefined : id)
 }
+
+const exitFocus = () => controller?.go(undefined)
+const nextAgent = () => controller?.step(1)
+const previousAgent = () => controller?.step(-1)
 
 const agentIds = (s: { nodes: Node[] }) =>
   s.nodes
@@ -62,6 +69,10 @@ export function AgentTerminals({ projectId }: { projectId: string }) {
       syncTerminals(projectId, cwd, ids ? ids.split(" ") : [])
   }, [projectId, cwd, ids, flow])
   useFocusMode()
+  const focused = useFocusedId() !== undefined
+  useCommand("focus.exit", focused ? exitFocus : undefined)
+  useCommand("focus.next", focused ? nextAgent : undefined)
+  useCommand("focus.previous", focused ? previousAgent : undefined)
   return null
 }
 
@@ -117,7 +128,6 @@ function useFocusMode() {
         motion()
       )
     }
-    controller = go
     const unsubscribe = flow.subscribe((s, prev) => {
       if (focus && (s.width !== prev.width || s.height !== prev.height))
         setFocus({ id: focus.id, size: fill() })
@@ -130,27 +140,16 @@ function useFocusMode() {
       if (next) go(next.id)
     }
 
-    // Capture phase, so these never reach the shell; plain Escape does.
-    function onKeyDown(e: KeyboardEvent) {
-      if (!focus || !e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.code === "Escape" && !e.shiftKey) go(undefined)
-      else if (e.shiftKey && e.code === "BracketRight") step(1)
-      else if (e.shiftKey && e.code === "BracketLeft") step(-1)
-      else return
-      e.preventDefault()
-      e.stopPropagation()
-    }
+    controller = { go, step }
     function onPointerDown(e: PointerEvent) {
       if (focus && !element(focus.id)?.contains(e.target as Element))
         go(undefined)
     }
     const dom = flow.getState().domNode
-    window.addEventListener("keydown", onKeyDown, true)
     dom?.addEventListener("pointerdown", onPointerDown, true)
     return () => {
       controller = undefined
       unsubscribe()
-      window.removeEventListener("keydown", onKeyDown, true)
       dom?.removeEventListener("pointerdown", onPointerDown, true)
       setFocus(undefined)
     }

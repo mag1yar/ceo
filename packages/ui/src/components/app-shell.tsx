@@ -80,22 +80,6 @@ function AppShell({ className, style, ...props }: ComponentProps<"div">) {
     setWidthState(next)
   }, [])
 
-  useEffect(() => {
-    function onKeyDown(event: globalThis.KeyboardEvent) {
-      // Cmd only: Ctrl+B is the tmux prefix inside terminals.
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
-        return
-      // Physical key, so Cmd+B also works on non-Latin layouts.
-      if (event.code !== "KeyB" || event.repeat) return
-      if (event.target instanceof HTMLElement && event.target.isContentEditable)
-        return
-      event.preventDefault()
-      toggleSidebar()
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [toggleSidebar])
-
   const context = useMemo(
     () => ({ collapsed, toggleSidebar, width, setWidth, rootRef }),
     [collapsed, toggleSidebar, width, setWidth]

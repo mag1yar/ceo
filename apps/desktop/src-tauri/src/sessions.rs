@@ -5,6 +5,7 @@ mod guard;
 mod hooks;
 pub mod shim;
 mod tmux;
+mod trust;
 mod worktree;
 
 use crate::store::{AgentSession, Store};
@@ -49,6 +50,8 @@ pub struct Sessions {
     // Sessions a pointer is being typed into, so two deliveries never type at once.
     nudging: Mutex<HashSet<String>>,
     ask_wait: Duration,
+    // Claude Code's `.claude.json`, where the worktrees this app creates are marked trusted.
+    claude_json: Option<PathBuf>,
 }
 
 #[cfg(not(feature = "e2e"))]
@@ -196,6 +199,15 @@ impl Sessions {
         self.nudging.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Only for worktrees under `<app data>/worktrees`; a failure leaves the trust dialog to the human.
+    fn trust(&self, key: &str, trusted: bool) {
+        if let Some(file) = &self.claude_json
+            && let Err(e) = trust::set(file, key, trusted)
+        {
+            println!("sessions: trust for {key}: {e}");
+        }
+    }
+
     fn session_dir(&self, id: &str) -> PathBuf {
         self.dir.join("sessions").join(id)
     }
@@ -234,6 +246,7 @@ impl Sessions {
                 let path = path.to_string_lossy().into_owned();
                 let branch = format!("ceo/{stem}-{short}");
                 worktree::add(&repo, &path, &branch, &base)?;
+                self.trust(&trust::key(&path), true);
                 (Some(path), Some(branch))
             }
             None => (None, None),
@@ -256,7 +269,11 @@ impl Sessions {
         if let Err(e) = store.insert_session(&row) {
             // No row would ever track this worktree, so take it back now (still without force).
             if let (Some(path), Some(branch)) = (&row.worktree, &row.branch) {
+                let key = trust::key(path);
                 let _ = worktree::remove(&row.repo, path, branch);
+                if !Path::new(path).exists() {
+                    self.trust(&key, false);
+                }
             }
             return Err(e);
         }
@@ -362,7 +379,15 @@ impl Sessions {
         }
         // `branch -d` keeps a branch with unmerged commits, so an executor's work stays for the owner to merge.
         let kept = match (&row.worktree, &row.branch) {
-            (Some(path), Some(branch)) => worktree::remove(&row.repo, path, branch).err(),
+            (Some(path), Some(branch)) => {
+                // The real path is gone once the worktree is.
+                let key = trust::key(path);
+                let kept = worktree::remove(&row.repo, path, branch).err();
+                if !Path::new(path).exists() {
+                    self.trust(&key, false);
+                }
+                kept
+            }
             _ => None,
         };
         if let Some(why) = &kept {
@@ -559,6 +584,7 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         heard: Mutex::default(),
         nudging: Mutex::default(),
         ask_wait: bus::ASK_WAIT,
+        claude_json: trust::config_file(),
     });
     let handle = app.handle().clone();
     std::thread::spawn(move || {

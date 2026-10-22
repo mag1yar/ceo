@@ -230,6 +230,7 @@ fn mock_app(dir: &Path, bins: Res<Bins>, socket: &str) -> tauri::App<MockRuntime
         heard: Mutex::default(),
         nudging: Mutex::default(),
         ask_wait: Duration::from_millis(300),
+        claude_json: Some(dir.join(".claude.json")),
     });
     app
 }
@@ -380,6 +381,18 @@ fn sessions_start_in_a_worktree_restart_with_resume_and_remove_cleanly() {
     let wt = PathBuf::from(row.worktree.clone().unwrap());
     assert!(wt.starts_with(d.path().join("worktrees").join(&p.id)));
     assert!(branches(&repo).contains(row.branch.as_deref().unwrap()));
+    // Keyed by the real path (tempdirs sit under the /var symlink), as claude resolves its cwd.
+    let trusted = |key: &str| {
+        let c: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join(".claude.json")).unwrap())
+                .unwrap();
+        c["projects"]
+            .get(key)
+            .map(|e| e == &json!({ "hasTrustDialogAccepted": true }))
+    };
+    let key = trust::key(row.worktree.as_deref().unwrap());
+    assert_ne!(Some(key.as_str()), row.worktree.as_deref());
+    assert_eq!(trusted(&key), Some(true), "marked before the launch");
     assert!(
         !tmux.has(&row.tmux_name[..4]),
         "exact targets: a prefix matches nothing"
@@ -412,6 +425,7 @@ fn sessions_start_in_a_worktree_restart_with_resume_and_remove_cleanly() {
     s.remove(&store, &row).unwrap();
     assert!(!tmux.has(&row.tmux_name));
     assert!(wt.join("resumable").exists());
+    assert_eq!(trusted(&key), Some(true), "a kept worktree stays trusted");
     assert!(
         store.node_session(&p.id, "n1").unwrap().is_none(),
         "the node is free for a new session"
@@ -420,6 +434,8 @@ fn sessions_start_in_a_worktree_restart_with_resume_and_remove_cleanly() {
 
     // Clean worktree: everything goes.
     let clean = s.create(&store, &p.id, "n2", "ceo", None, "ceo").unwrap();
+    let clean_key = trust::key(clean.worktree.as_deref().unwrap());
+    assert_eq!(trusted(&clean_key), Some(true));
     s.launch(&clean, (100, 30), "--session-id").unwrap();
     let args = PathBuf::from(clean.worktree.clone().unwrap()).join("args");
     wait_read(&args);
@@ -427,8 +443,63 @@ fn sessions_start_in_a_worktree_restart_with_resume_and_remove_cleanly() {
     s.remove(&store, &clean).unwrap();
     assert!(!tmux.has(&clean.tmux_name));
     assert!(!Path::new(clean.worktree.as_deref().unwrap()).exists());
+    assert_eq!(trusted(&clean_key), None, "a removed worktree's entry goes");
+    assert_eq!(trusted(&key), Some(true));
     assert!(!branches(&repo).contains(clean.branch.as_deref().unwrap()));
     assert!(store.project_sessions(&p.id).unwrap().is_empty());
+}
+
+#[test]
+fn trust_marks_a_path_and_keeps_the_rest_of_claude_json() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join(".claude.json");
+    let read = || std::fs::read_to_string(&f).unwrap();
+
+    // Missing file: created with just the entry, private to the owner.
+    trust::set(&f, "/w/a", true).unwrap();
+    let c: serde_json::Value = serde_json::from_str(&read()).unwrap();
+    assert_eq!(
+        c,
+        json!({ "projects": { "/w/a": { "hasTrustDialogAccepted": true } } })
+    );
+    assert_eq!(
+        std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    // Existing keys keep their values and order, an existing entry only gains the flag.
+    std::fs::write(
+        &f,
+        r#"{"zeta":1,"projects":{"/w/b":{"lastCost":0.5,"hasTrustDialogAccepted":false},"/w/c":{"x":[1,2]}},"alpha":{"n":12345678901234567890}}"#,
+    )
+    .unwrap();
+    trust::set(&f, "/w/b", true).unwrap();
+    trust::set(&f, "/w/new", true).unwrap();
+    let c: serde_json::Value = serde_json::from_str(&read()).unwrap();
+    let keys = |v: &serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    assert_eq!(keys(&c), ["zeta", "projects", "alpha"]);
+    assert_eq!(keys(&c["projects"]), ["/w/b", "/w/c", "/w/new"]);
+    assert_eq!(
+        c["projects"]["/w/b"],
+        json!({ "lastCost": 0.5, "hasTrustDialogAccepted": true })
+    );
+    assert_eq!(c["projects"]["/w/c"], json!({ "x": [1, 2] }));
+    assert!(read().contains("12345678901234567890"));
+
+    // Removal drops only that entry, the rest stays in place.
+    trust::set(&f, "/w/b", false).unwrap();
+    let c: serde_json::Value = serde_json::from_str(&read()).unwrap();
+    assert_eq!(keys(&c["projects"]), ["/w/c", "/w/new"]);
+    assert_eq!(keys(&c), ["zeta", "projects", "alpha"]);
+
+    // Not JSON (claude halfway through a write, say): left byte for byte, the dialog shows instead.
+    std::fs::write(&f, "{\"projects\": {").unwrap();
+    assert!(trust::set(&f, "/w/a", true).is_err());
+    assert_eq!(read(), "{\"projects\": {");
+    // Removing from a missing file creates nothing; no temp file is left behind.
+    std::fs::remove_file(&f).unwrap();
+    trust::set(&f, "/w/a", false).unwrap();
+    assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 0);
 }
 
 #[test]

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
 } from "node:fs"
@@ -85,6 +86,11 @@ describe("bus: the CEO spawns an executor that reports back", function () {
   git(repo, "init", "-q", "-b", "main")
   git(repo, "commit", "-q", "--allow-empty", "-m", "init")
   let projectId = ""
+  let ceoTrustKey = ""
+  // The throwaway HOME's Claude Code state, where the app marks its worktrees trusted.
+  const trusted = () =>
+    JSON.parse(readFileSync(`${process.env.CEO_E2E_HOME}/.claude.json`, "utf8"))
+      .projects as Record<string, { hasTrustDialogAccepted?: boolean }>
 
   before(async () => {
     mkdirSync("test-results-app", { recursive: true })
@@ -132,6 +138,12 @@ describe("bus: the CEO spawns an executor that reports back", function () {
         ),
       { timeout: 20000, timeoutMsg: "the CEO session never got ready" }
     )
+    const ceoRow = (await invoke<AgentSession[]>("session_list")).find(
+      (s) => s.projectId === projectId
+    ) as AgentSession
+    ceoTrustKey = realpathSync(ceoRow.worktree as string)
+    expect(trusted()[ceoTrustKey]).toEqual({ hasTrustDialogAccepted: true })
+    expect(trusted()[repo]).toBeUndefined()
     await node(ceo.id).$("button[aria-label='Focus terminal']").click()
     await browser.execute(
       (id) =>
@@ -156,6 +168,8 @@ describe("bus: the CEO spawns an executor that reports back", function () {
     expect(exec.role).toBe("executor")
     expect(exec.branch).toMatch(/^ceo\/exec-add-a-hello-file-/)
     expect(existsSync(`${exec.worktree}/.git`)).toBe(true)
+    const execTrustKey = realpathSync(exec.worktree as string)
+    expect(trusted()[execTrustKey]).toEqual({ hasTrustDialogAccepted: true })
     expect(git(repo, "branch", "--list", exec.branch as string)).toContain(
       exec.branch
     )
@@ -211,6 +225,7 @@ describe("bus: the CEO spawns an executor that reports back", function () {
       timeoutMsg: "the executor's tmux session survived",
     })
     expect(existsSync(exec.worktree as string)).toBe(false)
+    expect(trusted()[execTrustKey]).toBeUndefined()
     expect(git(repo, "log", "-1", "--format=%s", exec.branch as string)).toBe(
       "Add hello.txt"
     )
@@ -238,6 +253,7 @@ describe("bus: the CEO spawns an executor that reports back", function () {
       /^executor-/m
     )
     expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1)
+    expect(trusted()[ceoTrustKey]).toBeUndefined()
     // Only the executor's branch stays: the owner merges it.
     expect(git(repo, "branch", "--list", "ceo/*")).toMatch(
       /^\s*ceo\/exec-add-a-hello-file-\w+$/

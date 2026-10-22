@@ -262,5 +262,6 @@ test("pans 300 cards and reports frame timing", async ({ page }, info) => {
   info.annotations.push({ type: "fps", description: summary })
   console.log(`[${info.project.name}] ${summary}`)
   // Report only: WebKit caps rAF at 30 fps when the machine is busy, so a threshold would flake.
-  expect(await viewport(page)).not.toEqual(before)
+  // The viewport saves on a debounce after the pan ends.
+  await expect.poll(() => viewport(page)).not.toEqual(before)
 })

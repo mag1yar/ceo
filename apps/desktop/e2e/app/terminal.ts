@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { $, $$, browser, expect } from "@wdio/globals"
 import { buildTeam } from "../../src/features/agents/team"
+import type { BoardNode } from "../../src/lib/store"
 import { restartApp } from "./lib/app"
 import { invoke } from "./lib/projects"
 
@@ -18,9 +19,11 @@ type Term = {
     }
   }
 }
-type Hook = { e2e: { terminals: Record<number, Term> } }
+type Hook = { e2e: { terminals: Record<string, Term> } }
 
 const team = buildTeam()
+const ceo = team.nodes.find((n) => n.type === "ceo") as BoardNode
+const member = team.nodes.find((n) => n.type === "member") as BoardNode
 const agents =
   ".react-flow__node-ceo, .react-flow__node-lead, .react-flow__node-member"
 const sh = (cmd: string) => execSync(cmd).toString().trim()
@@ -48,82 +51,76 @@ const rssKb = (pids: number[]) =>
     .map((p) => Number(sh(`ps -o rss= -p ${p} || echo 0`)))
     .reduce((a, b) => a + b, 0)
 
-// Tab keys count up across the run, so read them from the dock.
-const tabKeys = () =>
-  browser.execute(() =>
-    [...document.querySelectorAll("[data-slot=terminal-dock] [role=tab]")].map(
-      (t) => Number(t.id.replace("terminal-tab-", ""))
-    )
-  )
-
-const screen = (key: number) =>
-  browser.execute((key) => {
-    const b = (window as unknown as Hook).e2e.terminals[key].buffer.active
+const screen = (id: string) =>
+  browser.execute((id) => {
+    const b = (window as unknown as Hook).e2e.terminals[id].buffer.active
     const lines: string[] = []
     for (let i = 0; i < b.length; i++)
       lines.push(b.getLine(i).translateToString(true))
     return lines.join("\n")
-  }, key)
+  }, id)
 
-// Sends input the way a keystroke does: through xterm's onData to the PTY.
-const type = (key: number, data: string) =>
+// Sends input the way a keystroke does: through xterm's onData, which a read-only terminal drops.
+const type = (id: string, data: string) =>
   browser.execute(
-    (key, data) =>
-      (window as unknown as Hook).e2e.terminals[key].input(data, true),
-    key,
+    (id, data) =>
+      (window as unknown as Hook).e2e.terminals[id].input(data, true),
+    id,
     data
   )
 
-async function waitFor(key: number, text: string) {
+async function waitFor(id: string, text: string) {
   await browser
-    .waitUntil(async () => (await screen(key)).includes(text), {
+    .waitUntil(async () => (await screen(id)).includes(text), {
       timeout: 15000,
     })
     .catch(async () => {
       throw new Error(
-        `terminal ${key} never showed ${text}:\n${await screen(key)}`
+        `terminal ${id} never showed ${text}:\n${await screen(id)}`
       )
     })
 }
 
-async function openTerminal() {
-  const before = (await tabKeys()).length
-  const pids = shells().length
-  await $(".react-flow__node-ceo").click()
-  await $("button=Open terminal").click()
-  await browser.waitUntil(async () => (await tabKeys()).length === before + 1)
-  // The tab shows at once; the shell is spawned while terminal_open runs.
-  await browser.waitUntil(() => shells().length === pids + 1)
-  const keys = await tabKeys()
-  return keys[keys.length - 1]
+const node = (id: string) => $(`.react-flow__node[data-id="${id}"]`)
+
+async function scheme() {
+  // The hidden app follows the system appearance, which tests must not change.
+  return (await browser.execute(
+    () => matchMedia("(prefers-color-scheme: dark)").matches
+  ))
+    ? "dark"
+    : "light"
 }
 
-// Close buttons of unselected tabs are transparent until hover, which WebDriver treats as not clickable.
-const closeAll = () =>
-  browser.execute(() => {
-    for (const b of document.querySelectorAll<HTMLElement>(
-      "[data-slot=terminal-dock] button[aria-label^=Close]"
-    ))
-      b.click()
-  })
+// Agents in a row: the CEO and n - 1 Members, enough for the memory readings.
+function row(n: number): BoardNode[] {
+  return Array.from({ length: n }, (_, i) => ({
+    ...(i ? member : ceo),
+    id: crypto.randomUUID(),
+    x: i * 700,
+    y: 0,
+  }))
+}
 
-describe("terminal in the hidden app", function () {
+describe("agent terminals in the hidden app", function () {
   // Real shells, top's refresh and idle pauses for the memory readings.
-  this.timeout(120000)
+  this.timeout(180000)
   let projectId = ""
   const dir = mkdtempSync("/tmp/ceo-e2e-term-")
   writeFileSync(join(dir, "known-file.txt"), "")
   let webkit: number[] = []
 
-  async function showProject() {
+  async function showProject(count: number) {
+    // A reload closes the shells of the previous page.
     await browser.execute(() => location.reload())
     await $(`ul[aria-label=Projects] button[title="${dir}"]`).click()
-    await browser.waitUntil(
-      async () => (await $$(agents).length) === team.nodes.length,
-      { timeout: 20000, timeoutMsg: "board did not render the team" }
-    )
-    await browser.execute(() => {
-      ;(window as unknown as Hook).e2e = { terminals: {} }
+    await browser.waitUntil(async () => (await $$(agents).length) === count, {
+      timeout: 20000,
+      timeoutMsg: "board did not render the agents",
+    })
+    await browser.waitUntil(() => shells().length === count, {
+      timeout: 20000,
+      timeoutMsg: `expected ${count} shells, saw ${shells().length}`,
     })
   }
 
@@ -138,10 +135,11 @@ describe("terminal in the hidden app", function () {
       changes: {
         upsertNodes: team.nodes,
         upsertEdges: team.edges,
-        viewport: { x: 700, y: 250, zoom: 0.5 },
+        // The whole team in view, so every node can be clicked.
+        viewport: { x: 510, y: 420, zoom: 0.2 },
       },
     })
-    await showProject()
+    await showProject(team.nodes.length)
   })
 
   after(async () => {
@@ -149,74 +147,91 @@ describe("terminal in the hidden app", function () {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  it("runs a login shell in the project folder: pwd, ls, top, resize, close", async () => {
-    const key = await openTerminal()
-    const [pid] = shells()
-    await type(key, "pwd\r")
-    await waitFor(key, dir)
-    await type(key, "ls\r")
-    await waitFor(key, "known-file.txt")
+  it("runs a login shell per agent: pwd, read-only overview, focus, top, tput cols", async () => {
+    mkdirSync("test-results-app", { recursive: true })
+    // The shell's prompt arrived.
+    await browser.waitUntil(async () => (await screen(ceo.id)).trim() !== "")
+    // Overview drops input.
+    await type(ceo.id, "echo overview-typed\r")
+    await browser.pause(500)
+    expect(await screen(ceo.id)).not.toContain("overview-typed")
+    await browser.saveScreenshot(
+      `test-results-app/terminal-overview-${await scheme()}.png`
+    )
+
+    await node(ceo.id).$("button[aria-label='Focus terminal']").click()
+    await browser.waitUntil(
+      async () =>
+        (
+          await browser.execute(() =>
+            document
+              .querySelector(".react-flow__viewport")
+              ?.getAttribute("style")
+          )
+        )?.includes("scale(1)") ?? false,
+      { timeoutMsg: "focus did not zoom to 100%" }
+    )
+    await type(ceo.id, "pwd\r")
+    await waitFor(ceo.id, dir)
+    await type(ceo.id, "ls\r")
+    await waitFor(ceo.id, "known-file.txt")
+
+    // The PTY took the focused size.
+    const cols = await browser.execute(
+      (id) => (window as unknown as Hook).e2e.terminals[id].cols,
+      ceo.id
+    )
+    expect(cols).toBeGreaterThan(100)
+    await type(ceo.id, "clear; tput cols\r")
+    await browser.waitUntil(async () =>
+      (await screen(ceo.id)).split("\n").includes(String(cols))
+    )
 
     // top redraws in place: the header is there and the screen changes between two reads.
-    await type(key, "top -s 1\r")
-    await waitFor(key, "PID")
-    const first = await screen(key)
-    await browser.waitUntil(async () => (await screen(key)) !== first, {
+    await type(ceo.id, "top -s 1\r")
+    await waitFor(ceo.id, "PID")
+    const first = await screen(ceo.id)
+    await browser.waitUntil(async () => (await screen(ceo.id)) !== first, {
       timeout: 5000,
       timeoutMsg: "top did not redraw",
     })
-    mkdirSync("test-results-app", { recursive: true })
-    // The hidden app follows the system appearance, which tests must not change.
-    const scheme = (await browser.execute(
-      () => matchMedia("(prefers-color-scheme: dark)").matches
-    ))
-      ? "dark"
-      : "light"
-    await browser.saveScreenshot(`test-results-app/terminal-top-${scheme}.png`)
-    await type(key, "q")
-    await browser.waitUntil(async () => !(await screen(key)).includes("PID"))
-
-    // Arrow keys on the splitter grow the dock; the new size must reach the PTY.
-    const rows = await browser.execute(
-      (key) => (window as unknown as Hook).e2e.terminals[key].rows,
-      key
+    await browser.saveScreenshot(
+      `test-results-app/terminal-focus-top-${await scheme()}.png`
     )
-    await browser.execute(() => {
-      const handle = document.querySelector(
-        "[data-slot=terminal-resize-handle]"
-      ) as HTMLElement
-      for (let i = 0; i < 8; i++)
-        handle.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })
+    await type(ceo.id, "q")
+    await browser.waitUntil(async () => !(await screen(ceo.id)).includes("PID"))
+    await node(ceo.id).$("button[aria-label='Exit focus']").click()
+  })
+
+  it("deleting an agent node kills its shell", async () => {
+    const before = shells()
+    await node(member.id).$("header").click()
+    // React Flow reads the key as held state, so the release must come in a later task.
+    const key = (type: string) =>
+      browser.execute((type) => {
+        document.activeElement?.dispatchEvent(
+          new KeyboardEvent(type, {
+            key: "Backspace",
+            code: "Backspace",
+            bubbles: true,
+          })
         )
-    })
-    await browser.waitUntil(async () => {
-      const r = await browser.execute(
-        (key) => (window as unknown as Hook).e2e.terminals[key].rows,
-        key
-      )
-      return r > rows
-    })
-    const size = await browser.execute((key) => {
-      const t = (window as unknown as Hook).e2e.terminals[key]
-      return `${t.rows} ${t.cols}`
-    }, key)
-    await type(key, "clear; stty size\r")
-    await browser.waitUntil(async () =>
-      (await screen(key)).split("\n").includes(size)
+      }, type)
+    await key("keydown")
+    await key("keyup")
+    await browser.waitUntil(
+      async () => (await $$(agents).length) === team.nodes.length - 1
     )
-
-    await closeAll()
-    await browser.waitUntil(() => !alive(pid), {
-      timeoutMsg: `shell ${pid} survived closing its tab`,
+    await browser.waitUntil(() => shells().length === before.length - 1, {
+      timeoutMsg: "the deleted agent's shell survived",
     })
+    const [gone] = before.filter((p) => !shells().includes(p))
+    expect(alive(gone)).toBe(false)
   })
 
   it("kills every shell when the app quits", async () => {
-    await openTerminal()
-    await openTerminal()
     const pids = shells()
-    expect(pids).toHaveLength(2)
+    expect(pids.length).toBeGreaterThan(0)
     const before = new Set(webkitPids())
     await restartApp()
     for (const pid of pids)
@@ -227,10 +242,21 @@ describe("terminal in the hidden app", function () {
     webkit = webkitPids().filter((p) => !before.has(p))
   })
 
-  it("records memory with 0, 1 and 5 terminals", async () => {
-    await showProject()
+  it("records memory with 1, 5 and 15 agents", async () => {
     const rows: string[] = []
-    const measure = async (n: number) => {
+    let shown = team.nodes.map((x) => x.id)
+    for (const n of [1, 5, 15]) {
+      const nodes = row(n)
+      await invoke("board_save", {
+        projectId,
+        changes: {
+          deleteNodeIds: shown,
+          upsertNodes: nodes,
+          viewport: { x: 40, y: 200, zoom: 0.15 },
+        },
+      })
+      shown = nodes.map((x) => x.id)
+      await showProject(n)
       await browser.pause(4000)
       const app = rssKb([appPid()])
       const helpers = rssKb(webkit)
@@ -238,21 +264,13 @@ describe("terminal in the hidden app", function () {
         `| ${n} | ${(app / 1024).toFixed(0)} | ${(helpers / 1024).toFixed(0)} | ${((app + helpers) / 1024).toFixed(0)} |`
       )
     }
-    await measure(0)
-    await openTerminal()
-    await measure(1)
-    for (let i = 0; i < 4; i++) await openTerminal()
-    expect(shells()).toHaveLength(5)
-    await measure(5)
     const table = [
       `WebKit helpers: ${webkit.map((p) => `${p} ${sh(`ps -o comm= -p ${p}`).split(".").pop()}`).join(", ")}`,
-      "| terminals | app MB | WebKit MB | total MB |",
+      "| agents | app MB | WebKit MB | total MB |",
       "|---|---|---|---|",
       ...rows,
     ].join("\n")
     console.log(table)
     writeFileSync("test-results-app/terminal-memory.md", `${table}\n`)
-    await closeAll()
-    await browser.waitUntil(() => shells().length === 0)
   })
 })

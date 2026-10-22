@@ -2,15 +2,16 @@
 import type { BoardEdge, BoardNode } from "../../lib/store"
 import type { AgentData, Model, Role } from "./agent"
 
-// Rendered sizes, so the layout can place node centres rather than corners.
+// Rendered sizes, so the layout can place node centres rather than corners. Each fits an 80x12 terminal at 100%.
+const AGENT_SIZE = { width: 624, height: 280 }
 export const NODE_SIZE: Record<Role, { width: number; height: number }> = {
-  ceo: { width: 256, height: 92 },
-  lead: { width: 224, height: 76 },
-  member: { width: 208, height: 58 },
+  ceo: AGENT_SIZE,
+  lead: AGENT_SIZE,
+  member: AGENT_SIZE,
 }
 
-const LEAD_RADIUS = 440
-const MEMBER_RADIUS = 260
+const LEAD_RADIUS = 800
+const MEMBER_RADIUS = 960
 const MEMBER_SPREAD = 0.8
 
 type Point = { x: number; y: number }
@@ -35,6 +36,36 @@ const polar = (o: Point, r: number, a: number) => ({
   x: o.x + r * Math.cos(a),
   y: o.y + r * Math.sin(a),
 })
+
+type Placed = {
+  id: string
+  type?: string
+  position: Point
+  data: { leadId?: string }
+}
+
+// Focus order: the CEO, then each Lead clockwise from the top followed by its Members, then the rest.
+export function agentOrder<T extends Placed>(nodes: T[]): T[] {
+  const ceo = nodes.find((n) => n.type === "ceo")
+  const o = (ceo ?? nodes[0])?.position
+  if (!o) return []
+  const angle = (n: T) =>
+    (Math.atan2(n.position.x - o.x, o.y - n.position.y) + 2 * Math.PI) %
+    (2 * Math.PI)
+  const around = nodes.toSorted((a, b) => angle(a) - angle(b))
+  const out = ceo ? [ceo] : []
+  // Members sweep clockwise across their Lead's direction, which may straddle the top.
+  const rel = (n: T, lead: T) =>
+    ((angle(n) - angle(lead) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI
+  for (const lead of around.filter((n) => n.type === "lead"))
+    out.push(
+      lead,
+      ...around
+        .filter((m) => m.type === "member" && m.data.leadId === lead.id)
+        .sort((a, b) => rel(a, lead) - rel(b, lead))
+    )
+  return [...out, ...around.filter((n) => !out.includes(n))]
+}
 
 const TEAMS: { name: string; model: Model; members: [string, Model][] }[] = [
   {

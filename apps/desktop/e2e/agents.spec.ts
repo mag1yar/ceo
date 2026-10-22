@@ -126,7 +126,7 @@ test("seeds a radial team with every status, inspects an agent and refuses Membe
   )
   await expect
     .poll(async () => centre(union(await pick(), 24)).y)
-    .toBeCloseTo(centre(area).y, 0)
+    .toBeCloseTo(centre(area).y, -1)
   picked = union(await pick(), 24)
   await page.screenshot({
     ...shot,
@@ -149,9 +149,8 @@ test("seeds a radial team with every status, inspects an agent and refuses Membe
   await expect(inspector).toContainText(
     `Status${status?.replace(/^./, (c) => c.toUpperCase())}`
   )
-  await expect(
-    inspector.getByRole("button", { name: "Open terminal" })
-  ).toBeEnabled()
+  // Terminals live in the nodes now, so the inspector has no terminal button.
+  await expect(inspector.getByRole("button")).toHaveCount(0)
   await page.screenshot({ ...shot, path: info.outputPath("inspector.png") })
   await node(page, "Board").click()
   await expect(inspector.getByRole("heading")).toHaveText("Board")

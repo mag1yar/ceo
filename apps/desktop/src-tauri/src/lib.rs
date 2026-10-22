@@ -16,6 +16,12 @@ pub fn run() {
         .manage(terminal::Terminals::new(
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
         ))
+        // A reload starts a fresh view that knows none of the open shells.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                webview.state::<terminal::Terminals>().close_all();
+            }
+        })
         .setup(|app| {
             #[cfg(feature = "e2e")]
             e2e::setup(app);

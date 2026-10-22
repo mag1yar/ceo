@@ -31,7 +31,9 @@ pub fn builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         )
 }
 
-const CSP_RECORDER: &str = r#"document.addEventListener("securitypolicyviolation", (e) => {
+// Also opens window.e2e, where terminals register as they open, before any spec code can run.
+const CSP_RECORDER: &str = r#"window.e2e = { terminals: {} };
+document.addEventListener("securitypolicyviolation", (e) => {
   const seen = JSON.parse(sessionStorage.getItem("ceo-e2e-csp") ?? "[]");
   seen.push(`${e.effectiveDirective} ${e.blockedURI} at ${e.sourceFile}:${e.lineNumber}`);
   sessionStorage.setItem("ceo-e2e-csp", JSON.stringify(seen));

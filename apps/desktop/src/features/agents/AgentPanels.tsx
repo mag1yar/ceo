@@ -1,4 +1,4 @@
-import { PlantIcon, TerminalWindowIcon } from "@phosphor-icons/react"
+import { PlantIcon } from "@phosphor-icons/react"
 import { Button } from "@workspace/ui/components/button"
 import {
   type Node,
@@ -9,9 +9,9 @@ import {
 } from "@xyflow/react"
 import { type ReactNode, useCallback, useState } from "react"
 import { toEdge } from "@/features/board/link"
-import { useOpenTerminal } from "@/features/terminal/terminals"
 import { store } from "@/lib/store"
 import { StatusIcon } from "./AgentNode"
+import { useFocusedId } from "./AgentTerminals"
 import { type AgentNode, isAgent, MODEL_LABEL, ROLE_LABEL } from "./agent"
 import { STATUS_LABEL, useLive } from "./status"
 import { buildTeam } from "./team"
@@ -24,7 +24,9 @@ export function AgentInspector() {
     []
   )
   useOnSelectionChange({ onChange })
-  return agent ? (
+  // Focus mode gives the board to the terminal.
+  const focused = useFocusedId() !== undefined
+  return agent && !focused ? (
     <Panel position="top-right">
       <Inspector agent={agent} />
     </Panel>
@@ -34,7 +36,6 @@ export function AgentInspector() {
 function Inspector({ agent }: { agent: AgentNode }) {
   const { status, action } = useLive(agent.id)
   const { name, model, branch, worktree } = agent.data
-  const openTerminal = useOpenTerminal()
   return (
     <aside
       aria-label="Agent inspector"
@@ -58,15 +59,6 @@ function Inspector({ agent }: { agent: AgentNode }) {
           {worktree}
         </Row>
       </dl>
-      <Button
-        variant="outline"
-        className="mt-4 w-full"
-        disabled={!openTerminal}
-        onClick={() => openTerminal?.(name)}
-      >
-        <TerminalWindowIcon />
-        Open terminal
-      </Button>
     </aside>
   )
 }

@@ -1,10 +1,10 @@
 import { expect, type Page, test } from "@playwright/test"
 
 type Ipc = { invoke: (cmd: string, args?: object) => Promise<unknown> }
-type Call = { cmd: string; id?: number; cols?: number; rows?: number }
+type Call = { cmd: string; id?: number; data?: string; cols?: number }
 type Hook = {
   e2e: {
-    terminals: Record<number, import("@xterm/xterm").Terminal>
+    terminals: Record<string, import("@xterm/xterm").Terminal>
     terminalCalls?: Call[]
   }
 }
@@ -18,184 +18,224 @@ const ipc = (page: Page, cmd: string, args?: object) =>
     [cmd, args] as const
   )
 
-// The xterm buffer as text, read through the e2e hook (the canvas has no DOM text).
-const buffer = (page: Page, key: number) =>
-  page.evaluate((key) => {
-    const b = (window as unknown as Hook).e2e.terminals[key].buffer.active
+const agents = (page: Page) =>
+  page.locator(
+    ".react-flow__node-ceo, .react-flow__node-lead, .react-flow__node-member"
+  )
+const node = (page: Page, name: string) =>
+  agents(page).filter({ has: page.getByText(name, { exact: true }) })
+const idOf = (page: Page, name: string) =>
+  node(page, name).getAttribute("data-id") as Promise<string>
+
+// The xterm buffer as text, read through the e2e hook.
+const buffer = (page: Page, id: string) =>
+  page.evaluate((id) => {
+    const b = (window as unknown as Hook).e2e.terminals[id].buffer.active
     const lines: string[] = []
     for (let i = 0; i < b.length; i++)
       lines.push(b.getLine(i)?.translateToString(true) ?? "")
     return lines.join("\n")
-  }, key)
+  }, id)
 
 const calls = (page: Page) =>
   page.evaluate(() => (window as unknown as Hook).e2e.terminalCalls ?? [])
+const count = async (page: Page, cmd: string) =>
+  (await calls(page)).filter((c) => c.cmd === cmd).length
 
-const focusedIn = (page: Page, selector: string) =>
-  page.evaluate((s) => !!document.activeElement?.closest(s), selector)
+const viewport = (page: Page) =>
+  page.locator(".react-flow__viewport").evaluate((el) => el.style.transform)
 
-const dock = (page: Page) => page.locator("[data-slot=terminal-dock]")
-const panel = (page: Page, key: number) => page.locator(`#terminal-${key}`)
-const agent = (page: Page, type: string) =>
-  page.locator(`.react-flow__node-${type}`).first()
+// Node id of the element holding the keyboard, if it is inside an agent's terminal.
+const typingIn = (page: Page) =>
+  page.evaluate(
+    () =>
+      document.activeElement
+        ?.closest("[data-slot=node-terminal]")
+        ?.closest(".react-flow__node")
+        ?.getAttribute("data-id") ?? null
+  )
 
-test("opens terminals from an agent, types, switches, hides, resizes and closes", async ({
+test("every agent node runs a terminal: overview, focus, keys and delete", async ({
   page,
 }, info) => {
   await page.goto("/")
   await expect(page.locator("[data-slot=app-shell]")).toBeVisible()
   await ipc(page, "project_create", { name: "term", path: "/tmp/term" })
+  await ipc(page, "project_create", { name: "other", path: "/tmp/other" })
   await page.reload()
-  await page.evaluate(() => {
-    ;(window as unknown as Hook).e2e = { terminals: {} }
-  })
+  const project = (name: string) =>
+    page.locator("ul[aria-label=Projects] button", { hasText: name }).click()
+  await project("term")
   await page.getByRole("button", { name: "Seed team" }).click()
-  await expect(page.locator(".react-flow__node-member")).not.toHaveCount(0)
+  await expect(agents(page)).toHaveCount(12)
 
-  // From the inspector.
-  await agent(page, "ceo").click()
-  await page.getByRole("button", { name: "Open terminal" }).click()
-  const tabs = dock(page).getByRole("tab")
-  await expect(tabs).toHaveCount(1)
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "true")
-  await expect(panel(page, 1)).toBeVisible()
-  await expect.poll(() => focusedIn(page, "#terminal-1")).toBe(true)
-  // Focus moved into the terminal: typing reaches the (mock) PTY and its echo comes back.
+  // One terminal per agent, each opened in the project folder.
+  await expect(page.locator("[data-slot=node-terminal] .xterm")).toHaveCount(12)
+  await expect.poll(() => count(page, "terminal_open")).toBe(12)
+  expect((await calls(page))[0]).toMatchObject({ cwd: "/tmp/term" })
+  const ceo = await idOf(page, "CEO")
+  const lead = await idOf(page, "Board")
+
+  // Overview is read-only: neither a click nor direct keyboard focus lets keys through.
+  // The terminal passes the pointer through, so this click lands on the node.
+  const out = await node(page, "CEO")
+    .locator("[data-slot=node-terminal]")
+    .boundingBox()
+  if (!out) throw new Error("no terminal")
+  await page.mouse.click(out.x + out.width / 2, out.y + out.height / 2)
+  await page.keyboard.type("ls")
+  await page.evaluate(
+    (id) => (window as unknown as Hook).e2e.terminals[id].focus(),
+    ceo
+  )
+  await page.keyboard.type("ls")
+  expect(await count(page, "terminal_write")).toBe(0)
+  await page.locator(".react-flow__pane").click({ position: { x: 20, y: 300 } })
+
+  // Overview close enough to read: 100% around the centre, then three steps out.
+  await page.keyboard.press("Meta+0")
+  for (const zoom of ["83%", "69%", "58%"]) {
+    await page.getByRole("button", { name: "Zoom out" }).click()
+    await expect(page.getByRole("button", { name: "Zoom to 100%" })).toHaveText(
+      zoom
+    )
+  }
+  await expect(node(page, "CEO")).toContainText("/tmp/term $")
+  await page.mouse.move(0, 0)
+  await page.screenshot({
+    path: info.outputPath("overview.png"),
+    animations: "disabled",
+  })
+  await page.getByRole("button", { name: "Fit board" }).click()
+  // Wait out the fit animation: two equal reads in a row.
+  let last = ""
+  await expect
+    .poll(async () => {
+      const [prev, now] = [last, await viewport(page)]
+      last = now
+      return prev === now
+    })
+    .toBe(true)
+
+  // A note on the board gives Cmd+Z something to undo.
+  await page.keyboard.press("n")
+  const notes = page.locator(".react-flow__node-note")
+  await expect(notes).toHaveCount(1)
+  await page.keyboard.press("Escape")
+  await page.locator(".react-flow__pane").click({ position: { x: 20, y: 300 } })
+
+  // Focus button: zoom to 100%, the node grows, the keyboard goes to its shell.
+  const overview = await viewport(page)
+  await node(page, "CEO")
+    .getByRole("button", { name: "Focus terminal" })
+    .click()
+  await expect.poll(() => viewport(page)).toMatch(/scale\(1\)/)
+  await expect.poll(() => typingIn(page)).toBe(ceo)
+  const board = await page.locator("[data-slot=board]").boundingBox()
+  const box = await node(page, "CEO").boundingBox()
+  expect(box?.width).toBeGreaterThan((board?.width ?? 0) - 40)
+  await expect
+    .poll(async () =>
+      (await calls(page)).some(
+        (c) => c.cmd === "terminal_resize" && (c.cols ?? 0) > 100
+      )
+    )
+    .toBe(true)
+  // A smaller window shrinks the focused node with it.
+  await page.setViewportSize({ width: 1100, height: 760 })
+  await expect
+    .poll(async () => {
+      const b = await page.locator("[data-slot=board]").boundingBox()
+      const n = await node(page, "CEO").boundingBox()
+      return Math.round((b?.width ?? 0) - (n?.width ?? 0))
+    })
+    .toBe(32)
+  await page.setViewportSize({ width: 1280, height: 800 })
   await page.keyboard.type("echo one")
   await page.keyboard.press("Enter")
-  await expect.poll(() => buffer(page, 1)).toContain("echo one")
-  expect((await calls(page))[0]).toMatchObject({
-    cmd: "terminal_open",
-    cwd: "/tmp/term",
-  })
+  await expect.poll(() => buffer(page, ceo)).toContain("echo one")
 
-  // From the node context menu.
-  await agent(page, "lead").click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Open terminal" }).click()
-  await expect(tabs).toHaveCount(2)
-  await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true")
-  await expect(panel(page, 1)).toBeHidden()
-  await expect(panel(page, 2)).toBeVisible()
-  await expect.poll(() => focusedIn(page, "#terminal-2")).toBe(true)
-  await page.keyboard.type("two")
-  await expect.poll(() => buffer(page, 2)).toContain("two")
-  expect(await buffer(page, 1)).not.toContain("two")
+  // Plain Escape reaches the shell and keeps focus; board keys stay with the terminal.
+  await page.keyboard.press("Escape")
+  await expect
+    .poll(async () => (await calls(page)).some((c) => c.data === "\x1b"))
+    .toBe(true)
+  await page.keyboard.press("n")
+  await page.keyboard.press("Meta+z")
+  await page.keyboard.press("Backspace")
+  await expect(notes).toHaveCount(1)
+  await expect(agents(page)).toHaveCount(12)
+  expect(await typingIn(page)).toBe(ceo)
+  expect(await viewport(page)).toMatch(/scale\(1\)/)
 
   await page.mouse.move(0, 0)
   await page.screenshot({
-    path: info.outputPath("dock-two-tabs.png"),
+    path: info.outputPath("focus.png"),
     animations: "disabled",
   })
 
-  // Switch back: the first terminal shows and takes the keyboard.
-  await tabs.first().click()
-  await expect(panel(page, 1)).toBeVisible()
-  await expect(panel(page, 2)).toBeHidden()
-  await expect.poll(() => focusedIn(page, "#terminal-1")).toBe(true)
-  await page.keyboard.type("!")
-  await expect.poll(() => buffer(page, 1)).toContain("!")
-
-  // Cmd+K clears the scrollback; Cmd+C with a selection copies it.
-  await page.keyboard.type("keep")
-  await page.evaluate(() => {
+  // Cmd+C copies a selection, Cmd+K clears, as in #8.
+  await page.evaluate((id) => {
     const w = window as unknown as { copied?: string }
     navigator.clipboard.writeText = async (t: string) => {
       w.copied = t
     }
-    ;(window as unknown as Hook).e2e.terminals[1].selectAll()
-  })
+    ;(window as unknown as Hook).e2e.terminals[id].selectAll()
+  }, ceo)
   await page.keyboard.press("Meta+c")
   await expect
     .poll(() => page.evaluate(() => (window as { copied?: string }).copied))
     .toContain("echo one")
-  // A paste event goes through xterm to the PTY.
-  await page.evaluate(() => {
-    const data = new DataTransfer()
-    data.setData("text/plain", "pasted")
-    document
-      .querySelector("#terminal-1 textarea")
-      ?.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data }))
-  })
-  await expect.poll(() => buffer(page, 1)).toContain("pasted")
-
-  // Hiding keeps the terminal and its scrollback; focus returns to the board.
-  await dock(page).getByRole("button", { name: "Hide terminals" }).click()
-  await expect(panel(page, 1)).toBeHidden()
-  await expect(tabs).toHaveCount(2)
-  expect(await focusedIn(page, "[data-slot=terminal-dock]")).toBe(false)
-  await page.keyboard.press("Control+Backquote")
-  await expect(panel(page, 1)).toBeVisible()
-  await expect.poll(() => focusedIn(page, "#terminal-1")).toBe(true)
-  expect(await buffer(page, 1)).toContain("echo one")
 
   await page.keyboard.press("Meta+k")
-  await expect.poll(() => buffer(page, 1)).not.toContain("echo one")
+  await expect.poll(() => buffer(page, ceo)).not.toContain("echo one")
 
-  // Dragging the top edge up grows the dock; the fit addon resizes the PTY.
-  const rowsBefore = await page.evaluate(
-    () => (window as unknown as Hook).e2e.terminals[1].rows
-  )
-  const handle = page.locator("[data-slot=terminal-resize-handle]")
-  const h = await handle.boundingBox()
-  if (!h) throw new Error("no resize handle")
-  await page.mouse.move(h.x + 200, h.y + h.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(h.x + 200, h.y - 150, { steps: 6 })
-  await page.mouse.up()
-  await expect
-    .poll(async () =>
-      (await calls(page)).some(
-        (c) =>
-          c.cmd === "terminal_resize" &&
-          c.id === 1 &&
-          (c.rows ?? 0) > rowsBefore
-      )
+  // Next and previous agent without zooming out.
+  await page.keyboard.press("Meta+Shift+BracketRight")
+  await expect.poll(() => typingIn(page)).toBe(lead)
+  expect(await viewport(page)).toMatch(/scale\(1\)/)
+  await page.keyboard.type("two")
+  await expect.poll(() => buffer(page, lead)).toContain("two")
+  await page.keyboard.press("Meta+Shift+BracketLeft")
+  await expect.poll(() => typingIn(page)).toBe(ceo)
+
+  // Cmd+Escape restores the overview.
+  await page.keyboard.press("Meta+Escape")
+  await expect.poll(() => viewport(page)).toBe(overview)
+  expect(await typingIn(page)).toBe(null)
+
+  // Header double click focuses; a click on the board outside the node leaves.
+  await node(page, "Board").locator("header").dblclick()
+  await expect.poll(() => typingIn(page)).toBe(lead)
+  const area = await page.locator("[data-slot=board]").boundingBox()
+  if (!area) throw new Error("no board")
+  await page.mouse.click(area.x + 6, area.y + area.height / 2)
+  await expect.poll(() => viewport(page)).toBe(overview)
+  expect(await typingIn(page)).toBe(null)
+
+  // Deleting a Member closes its PTY; undo brings the node back with a fresh shell.
+  const member = await idOf(page, "Notes")
+  const closes = await count(page, "terminal_close")
+  await node(page, "Notes").locator("header").click()
+  await page.keyboard.press("Backspace")
+  await expect(agents(page)).toHaveCount(11)
+  await expect.poll(() => count(page, "terminal_close")).toBe(closes + 1)
+  expect(
+    await page.evaluate(
+      (id) => id in (window as unknown as Hook).e2e.terminals,
+      member
     )
-    .toBe(true)
-  const stored = await page.evaluate(() =>
-    Number(localStorage.getItem("ceo.terminal.height"))
-  )
-  expect(stored).toBeGreaterThan(280 + 100)
+  ).toBe(false)
+  await page.keyboard.press("Meta+z")
+  await expect(agents(page)).toHaveCount(12)
+  await expect.poll(() => count(page, "terminal_open")).toBe(13)
 
-  const closed = (id: number) =>
-    expect
-      .poll(async () =>
-        (await calls(page)).some(
-          (c) => c.cmd === "terminal_close" && c.id === id
-        )
-      )
-      .toBe(true)
-  const close = (name: string) =>
-    dock(page)
-      .getByRole("button", { name: `Close ${name}` })
-      .click()
-
-  // Closing a background tab kills its PTY and leaves the selection alone.
-  await tabs.nth(1).hover()
-  await close("Board")
-  await expect(tabs).toHaveCount(1)
-  await closed(2)
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "true")
-
-  // Closing the selected tab moves to its neighbour.
-  await page.getByRole("button", { name: "Open terminal" }).click()
-  await expect(tabs).toHaveCount(2)
-  await tabs.first().click()
-  await close("CEO")
-  await closed(1)
-  await expect(tabs.first()).toHaveAttribute("aria-selected", "true")
-  await expect(panel(page, 3)).toBeVisible()
-
-  // Removing the project takes its terminals with it.
-  await page
-    .locator("ul[aria-label=Projects] button")
-    .first()
-    .click({ button: "right" })
-  await page.getByRole("menuitem", { name: "Remove from list…" }).click()
-  await page
-    .getByRole("alertdialog")
-    .getByRole("button", { name: "Remove" })
-    .click()
-  await expect(dock(page)).toHaveCount(0)
-  await closed(3)
+  // Another project and back: the shells and their scrollback stay.
+  await project("other")
+  await expect(agents(page)).toHaveCount(0)
+  await project("term")
+  await expect(agents(page)).toHaveCount(12)
+  await expect(node(page, "Board")).toContainText("two")
+  expect(await count(page, "terminal_open")).toBe(13)
+  expect(await count(page, "terminal_close")).toBe(closes + 1)
 })

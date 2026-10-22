@@ -90,7 +90,8 @@ describe("agent team in the hidden app", () => {
       changes: {
         upsertNodes: team.nodes,
         upsertEdges: team.edges,
-        viewport: { x: 700, y: 450, zoom: 0.5 },
+        // The whole team in view, clear of the edges where a drag auto-pans.
+        viewport: { x: 510, y: 420, zoom: 0.2 },
       },
     })
     await browser.execute(() => location.reload())

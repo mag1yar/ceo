@@ -25,6 +25,9 @@ const byId = (x: { id: string }, y: { id: string }) =>
   x.id < y.id ? -1 : x.id > y.id ? 1 : 0
 
 let terminalSeq = 0
+// Terminals register in window.e2e.terminals as they open, which is before any spec code runs.
+const hook = window as { e2e?: object }
+hook.e2e = { terminals: {}, ...hook.e2e }
 const terminalOut = new Map<number, { channel: number; index: number }>()
 
 mockWindows("main")
@@ -122,20 +125,9 @@ function handle(cmd: string, payload: unknown) {
         ...w.e2e,
         terminalCalls: [...(w.e2e?.terminalCalls ?? []), { cmd, ...args }],
       }
-      if (onOutput) {
-        const id = ++terminalSeq
-        terminalOut.set(id, { channel: onOutput.id, index: 0 })
-        return id
-      }
-      const t = terminalOut.get(a.id as unknown as number)
-      if (!t) throw `no terminal ${a.id}`
-      if (cmd === "terminal_close")
-        terminalOut.delete(a.id as unknown as number)
-      if (cmd === "terminal_write") {
-        const bytes = new TextEncoder().encode(
-          a.data.replaceAll("\r", "\r\n")
-        ).buffer
-        // Same envelope as Rust channels: an index keeps messages in order.
+      // Same envelope as Rust channels: an index keeps messages in order.
+      const emit = (t: { channel: number; index: number }, text: string) => {
+        const message = new TextEncoder().encode(text).buffer
         const run = (
           window as unknown as {
             __TAURI_INTERNALS__: {
@@ -143,8 +135,21 @@ function handle(cmd: string, payload: unknown) {
             }
           }
         ).__TAURI_INTERNALS__.runCallback
-        setTimeout(() => run(t.channel, { index: t.index++, message: bytes }))
+        setTimeout(() => run(t.channel, { index: t.index++, message }))
       }
+      if (onOutput) {
+        const id = ++terminalSeq
+        const t = { channel: onOutput.id, index: 0 }
+        terminalOut.set(id, t)
+        // A prompt, so every overview terminal shows output.
+        emit(t, `\x1b[2m${a.cwd}\x1b[0m $ `)
+        return id
+      }
+      const t = terminalOut.get(a.id as unknown as number)
+      if (!t) throw `no terminal ${a.id}`
+      if (cmd === "terminal_close")
+        terminalOut.delete(a.id as unknown as number)
+      if (cmd === "terminal_write") emit(t, a.data.replaceAll("\r", "\r\n"))
       return null
     }
     default:

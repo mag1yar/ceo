@@ -1,51 +1,26 @@
 import { Channel, invoke } from "@tauri-apps/api/core"
 import { FitAddon } from "@xterm/addon-fit"
 import { type ITheme, Terminal } from "@xterm/xterm"
-import { useSyncExternalStore } from "react"
-import { useProjects } from "@/features/projects/projects"
+import { useCallback, useSyncExternalStore } from "react"
 
-export type Tab = {
-  key: number
+export type Session = {
   projectId: string
-  title: string
   term: Terminal
   fit: FitAddon
-  exited: boolean
+  close: () => void
 }
 
-type State = {
-  tabs: Tab[]
-  // Selected tab per project.
-  active: Record<string, number>
-  shown: boolean
-}
+// One shell per agent node, keyed by node id: it outlives the node's mount and the board's.
+const sessions = new Map<string, Session>()
+const watchers = new Map<string, Set<() => void>>()
 
-let state: State = { tabs: [], active: {}, shown: true }
-const listeners = new Set<() => void>()
-let seq = 0
-// Closes the PTY behind each tab, through that tab's ordered command chain.
-const ptys = new Map<number, () => void>()
-// Where focus goes back to when the dock hides.
-let returnTo: Element | null = null
-
-function set(next: Partial<State>) {
-  state = { ...state, ...next }
-  for (const l of listeners) l()
+const notify = (id: string) => {
+  for (const cb of watchers.get(id) ?? []) cb()
 }
 
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  for (const t of state.tabs) t.term.options.theme = theme()
+  for (const s of sessions.values()) s.term.options.theme = theme()
 })
-
-export function useTerminals() {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l)
-      return () => listeners.delete(l)
-    },
-    () => state
-  )
-}
 
 const token = (name: string) =>
   getComputedStyle(document.documentElement)
@@ -62,19 +37,19 @@ export function theme(): ITheme {
   }
 }
 
-function rememberFocus() {
-  const el = document.activeElement
-  if (!el?.closest("[data-slot=terminal-dock], [role=menu]")) returnTo = el
-}
+type Hook = { e2e?: { terminals?: Record<string, Terminal> } }
 
-export function openTerminal(projectId: string, cwd: string, title: string) {
-  const key = ++seq
+function open(id: string, projectId: string, cwd: string): Session {
   const term = new Terminal({
     fontFamily: getComputedStyle(document.documentElement)
       .getPropertyValue("--font-mono")
       .trim(),
     fontSize: 12,
     lineHeight: 1.2,
+    cols: 80,
+    rows: 12,
+    // Overview is read-only; focus mode turns input on.
+    disableStdin: true,
     cursorBlink: true,
     // Lifts ANSI colours that would vanish on the light background.
     minimumContrastRatio: 4.5,
@@ -84,13 +59,13 @@ export function openTerminal(projectId: string, cwd: string, title: string) {
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
-  const tab: Tab = { key, projectId, title, term, fit, exited: false }
+  let live = true
 
   const output = new Channel<ArrayBuffer>((bytes) => {
-    // Output still in flight when the tab closed.
-    if (!ptys.has(key)) return
+    // Output still in flight when the session closed.
+    if (!live) return
     if (bytes.byteLength) term.write(new Uint8Array(bytes))
-    else markExited(key)
+    else term.write("\r\n\x1b[2m[process exited]\x1b[0m")
   })
   let queue: Promise<number | undefined> = invoke<number>("terminal_open", {
     cwd,
@@ -99,25 +74,21 @@ export function openTerminal(projectId: string, cwd: string, title: string) {
     onOutput: output,
   }).catch((e) => {
     term.write(`\x1b[31m${e}\x1b[0m\r\n`)
-    markExited(key)
     return undefined
   })
   // One chain keeps writes and resizes in order: async commands may otherwise overtake each other.
   const send = (cmd: string, args: object) => {
-    queue = queue.then(async (id) => {
-      if (id !== undefined)
-        await invoke(cmd, { id, ...args }).catch(console.error)
-      return id
+    queue = queue.then(async (pty) => {
+      if (pty !== undefined)
+        await invoke(cmd, { id: pty, ...args }).catch(console.error)
+      return pty
     })
   }
   term.onData((data) => send("terminal_write", { data }))
   term.onResize(({ cols, rows }) => send("terminal_resize", { cols, rows }))
-  ptys.set(key, () => send("terminal_close", {}))
 
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type !== "keydown") return true
-    if (e.ctrlKey && e.code === "Backquote") return false
-    if (!e.metaKey) return true
+    if (e.type !== "keydown" || !e.metaKey) return true
     if (e.key === "k") {
       term.clear()
       return false
@@ -129,77 +100,60 @@ export function openTerminal(projectId: string, cwd: string, title: string) {
     return true
   })
 
-  // Specs set window.e2e to read the buffer of a canvas-rendered terminal.
-  const e2e = (window as { e2e?: { terminals?: Record<number, Terminal> } }).e2e
-  if (e2e) e2e.terminals = { ...e2e.terminals, [key]: term }
+  // Specs read the buffer through window.e2e: the terminal has no stable DOM text.
+  const e2e = (window as Hook).e2e
+  if (e2e) e2e.terminals = { ...e2e.terminals, [id]: term }
 
-  rememberFocus()
-  set({
-    tabs: [...state.tabs, tab],
-    active: { ...state.active, [projectId]: key },
-    shown: true,
-  })
-  focusSoon(tab)
+  return {
+    projectId,
+    term,
+    fit,
+    close: () => {
+      live = false
+      send("terminal_close", {})
+      term.dispose()
+      delete (window as Hook).e2e?.terminals?.[id]
+    },
+  }
 }
 
-function markExited(key: number) {
-  set({
-    tabs: state.tabs.map((t) => (t.key === key ? { ...t, exited: true } : t)),
-  })
+function close(id: string) {
+  sessions.get(id)?.close()
+  sessions.delete(id)
+  notify(id)
 }
 
-export function selectTerminal(key: number) {
-  const tab = state.tabs.find((t) => t.key === key)
-  if (!tab) return
-  if (!state.shown) rememberFocus()
-  set({ active: { ...state.active, [tab.projectId]: key }, shown: true })
-  focusSoon(tab)
+// Opens a shell for every agent node of the project that lacks one and closes those whose node is gone.
+export function syncTerminals(projectId: string, cwd: string, ids: string[]) {
+  const keep = new Set(ids)
+  for (const [id, s] of sessions)
+    if (s.projectId === projectId && !keep.has(id)) close(id)
+  for (const id of ids)
+    if (!sessions.has(id)) {
+      sessions.set(id, open(id, projectId, cwd))
+      notify(id)
+    }
 }
 
-export function closeTerminal(key: number) {
-  const tab = state.tabs.find((t) => t.key === key)
-  if (!tab) return
-  ptys.get(key)?.()
-  ptys.delete(key)
-  const wasActive = state.active[tab.projectId] === key
-  const siblings = state.tabs.filter((t) => t.projectId === tab.projectId)
-  const i = siblings.indexOf(tab)
-  const next = siblings[i + 1] ?? siblings[i - 1]
-  const active = { ...state.active }
-  if (wasActive && next) active[tab.projectId] = next.key
-  else if (!next) delete active[tab.projectId]
-  set({ tabs: state.tabs.filter((t) => t !== tab), active })
-  tab.term.dispose()
-  if (!next) restoreFocus()
-  else if (wasActive) focusSoon(next)
+// A project removed from the list takes its shells with it.
+export function pruneTerminals(projectIds: string[]) {
+  const keep = new Set(projectIds)
+  for (const [id, s] of sessions) if (!keep.has(s.projectId)) close(id)
 }
 
-export function setShown(projectId: string, shown: boolean) {
-  if (shown === state.shown) return
-  if (shown) rememberFocus()
-  else restoreFocus()
-  set({ shown })
-  const tab = state.tabs.find((t) => t.key === state.active[projectId])
-  if (shown && tab) focusSoon(tab)
-}
+export const getSession = (id: string) => sessions.get(id)
 
-// Store updates render synchronously before the next frame, so the view is visible by then.
-function focusSoon(tab: Tab) {
-  requestAnimationFrame(() => tab.term.focus())
-}
-
-function restoreFocus() {
-  const el = document.activeElement
-  if (!el?.closest("[data-slot=terminal-dock]")) return
-  if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus()
-  else (el as HTMLElement).blur()
-}
-
-// Opens a shell in the active project's folder, titled after the agent it came from.
-export function useOpenTerminal() {
-  const { projects, activeId } = useProjects()
-  const project = projects?.find((p) => p.id === activeId)
-  return project
-    ? (title: string) => openTerminal(project.id, project.path, title)
-    : undefined
+export function useSession(id: string) {
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      const set = watchers.get(id) ?? new Set()
+      watchers.set(id, set.add(cb))
+      return () => {
+        set.delete(cb)
+        if (!set.size) watchers.delete(id)
+      }
+    },
+    [id]
+  )
+  return useSyncExternalStore(subscribe, () => sessions.get(id))
 }

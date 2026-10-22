@@ -8,11 +8,12 @@ import {
   SidebarHeader,
   SidebarTrigger,
 } from "@workspace/ui/components/app-shell"
+import { useEffect } from "react"
 import { Board } from "@/features/board/Board"
 import { ProjectList } from "@/features/projects/ProjectList"
 import { ProjectsEmpty } from "@/features/projects/ProjectsEmpty"
 import { Projects, useProjects } from "@/features/projects/projects"
-import { TerminalDock } from "@/features/terminal/TerminalDock"
+import { pruneTerminals } from "@/features/terminal/terminals"
 
 export function App() {
   return (
@@ -48,11 +49,13 @@ function ProjectTitle() {
 
 function ActiveProject() {
   const { projects, activeId: projectId } = useProjects()
+  useEffect(() => {
+    if (projects) pruneTerminals(projects.map((p) => p.id))
+  }, [projects])
   return (
     <MainContent>
       {projects?.length === 0 && <ProjectsEmpty />}
       {projectId && <Board key={projectId} projectId={projectId} />}
-      <TerminalDock projectId={projectId ?? undefined} />
     </MainContent>
   )
 }

@@ -28,6 +28,7 @@ import {
   useState,
 } from "react"
 import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
+import { AgentTerminals } from "@/features/agents/AgentTerminals"
 import { useIsValidConnection } from "@/features/agents/canConnect"
 import { newDiagram } from "@/features/diagrams/diagram"
 import {
@@ -324,6 +325,7 @@ function Canvas({
       <ZoomControls />
       <BoardToolbar onAddNote={addNoteAtCenter} onAddDiagram={addDiagram} />
       <AgentInspector />
+      <AgentTerminals projectId={projectId} />
       {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
     </ReactFlow>
   )

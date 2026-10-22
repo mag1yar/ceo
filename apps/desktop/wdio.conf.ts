@@ -39,6 +39,19 @@ export const config: WebdriverIO.Config = {
     browser.switchToWindow(await browser.getWindowHandle()),
   onComplete: () => rmSync(home, { recursive: true, force: true }),
   framework: "mocha",
+  mochaOpts: {
+    rootHooks: {
+      // Fails the test on any CSP violation the e2e init script recorded, clearing them so later tests start clean.
+      async afterEach() {
+        const seen = await browser.execute(() => {
+          const seen = sessionStorage.getItem("ceo-e2e-csp")
+          sessionStorage.removeItem("ceo-e2e-csp")
+          return seen
+        })
+        if (seen) throw new Error(`CSP violations: ${seen}`)
+      },
+    },
+  },
   reporters: ["spec"],
   logLevel: "warn",
 }

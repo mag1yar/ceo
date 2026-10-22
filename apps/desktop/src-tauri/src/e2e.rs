@@ -17,6 +17,8 @@ pub fn builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
         .plugin(tauri_plugin_wdio_webdriver::init())
         .plugin(
             plugin::Builder::<R>::new("ceo-e2e")
+                // Runs before app code on every load; sessionStorage keeps violations across reloads for wdio's afterEach.
+                .js_init_script(CSP_RECORDER)
                 .on_webview_ready(|webview| {
                     // The window starts hidden and is shown only after the switch, which WebKit reads when it appears.
                     let window = webview.window();
@@ -28,6 +30,12 @@ pub fn builder<R: Runtime>(builder: Builder<R>) -> Builder<R> {
                 .build(),
         )
 }
+
+const CSP_RECORDER: &str = r#"document.addEventListener("securitypolicyviolation", (e) => {
+  const seen = JSON.parse(sessionStorage.getItem("ceo-e2e-csp") ?? "[]");
+  seen.push(`${e.effectiveDirective} ${e.blockedURI} at ${e.sourceFile}:${e.lineNumber}`);
+  sessionStorage.setItem("ceo-e2e-csp", JSON.stringify(seen));
+});"#;
 
 pub fn setup<R: Runtime>(app: &mut App<R>) {
     app.set_activation_policy(ActivationPolicy::Accessory);

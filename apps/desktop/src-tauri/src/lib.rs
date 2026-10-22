@@ -2,6 +2,9 @@
 mod e2e;
 mod git;
 mod store;
+mod terminal;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,6 +13,9 @@ pub fn run() {
     let builder = e2e::builder(builder);
     builder
         .plugin(tauri_plugin_dialog::init())
+        .manage(terminal::Terminals::new(
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+        ))
         .setup(|app| {
             #[cfg(feature = "e2e")]
             e2e::setup(app);
@@ -25,9 +31,18 @@ pub fn run() {
             store::board_load,
             store::board_save,
             git::project_is_git,
+            terminal::terminal_open,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<terminal::Terminals>().close_all();
+            }
+        });
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ import { Board } from "@/features/board/Board"
 import { ProjectList } from "@/features/projects/ProjectList"
 import { ProjectsEmpty } from "@/features/projects/ProjectsEmpty"
 import { Projects, useProjects } from "@/features/projects/projects"
+import { TerminalDock } from "@/features/terminal/TerminalDock"
 
 export function App() {
   return (
@@ -51,6 +52,7 @@ function ActiveProject() {
     <MainContent>
       {projects?.length === 0 && <ProjectsEmpty />}
       {projectId && <Board key={projectId} projectId={projectId} />}
+      <TerminalDock projectId={projectId ?? undefined} />
     </MainContent>
   )
 }

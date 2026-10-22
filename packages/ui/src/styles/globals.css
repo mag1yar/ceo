@@ -333,3 +333,25 @@
     --agent-done: oklch(0.72 0.15 152);
   }
 }
+
+/* #8 terminal dock: xterm reads --terminal-* at runtime, Tailwind maps the dock surface. */
+@theme inline {
+  --color-terminal-background: var(--terminal-background);
+  --color-terminal-foreground: var(--terminal-foreground);
+}
+
+:root {
+  --terminal-background: oklch(0.985 0 0);
+  --terminal-foreground: oklch(0.2 0 0);
+  --terminal-cursor: oklch(0.2 0 0);
+  --terminal-selection: oklch(0.56 0.19 257 / 22%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --terminal-background: oklch(0.19 0 0);
+    --terminal-foreground: oklch(0.94 0 0);
+    --terminal-cursor: oklch(0.94 0 0);
+    --terminal-selection: oklch(0.66 0.17 257 / 35%);
+  }
+}

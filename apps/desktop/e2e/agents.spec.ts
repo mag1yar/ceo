@@ -151,7 +151,7 @@ test("seeds a radial team with every status, inspects an agent and refuses Membe
   )
   await expect(
     inspector.getByRole("button", { name: "Open terminal" })
-  ).toBeDisabled()
+  ).toBeEnabled()
   await page.screenshot({ ...shot, path: info.outputPath("inspector.png") })
   await node(page, "Board").click()
   await expect(inspector.getByRole("heading")).toHaveText("Board")

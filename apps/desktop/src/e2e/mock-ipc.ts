@@ -24,6 +24,9 @@ const e2e = () =>
 const byId = (x: { id: string }, y: { id: string }) =>
   x.id < y.id ? -1 : x.id > y.id ? 1 : 0
 
+let terminalSeq = 0
+const terminalOut = new Map<number, { channel: number; index: number }>()
+
 mockWindows("main")
 // Copies, like real IPC: callers must never hold references into the mock store.
 mockIPC((cmd, payload) => {
@@ -108,6 +111,42 @@ function handle(cmd: string, payload: unknown) {
       return e2e().folder ?? null
     case "project_is_git":
       return e2e().gitFolders?.includes(a.path) ?? false
+    // Fake terminal: echoes input back through the channel, records every call in window.e2e.terminalCalls.
+    case "terminal_open":
+    case "terminal_write":
+    case "terminal_resize":
+    case "terminal_close": {
+      const { onOutput, ...args } = payload as { onOutput?: { id: number } }
+      const w = window as { e2e?: { terminalCalls?: unknown[] } }
+      w.e2e = {
+        ...w.e2e,
+        terminalCalls: [...(w.e2e?.terminalCalls ?? []), { cmd, ...args }],
+      }
+      if (onOutput) {
+        const id = ++terminalSeq
+        terminalOut.set(id, { channel: onOutput.id, index: 0 })
+        return id
+      }
+      const t = terminalOut.get(a.id as unknown as number)
+      if (!t) throw `no terminal ${a.id}`
+      if (cmd === "terminal_close")
+        terminalOut.delete(a.id as unknown as number)
+      if (cmd === "terminal_write") {
+        const bytes = new TextEncoder().encode(
+          a.data.replaceAll("\r", "\r\n")
+        ).buffer
+        // Same envelope as Rust channels: an index keeps messages in order.
+        const run = (
+          window as unknown as {
+            __TAURI_INTERNALS__: {
+              runCallback: (id: number, m: object) => void
+            }
+          }
+        ).__TAURI_INTERNALS__.runCallback
+        setTimeout(() => run(t.channel, { index: t.index++, message: bytes }))
+      }
+      return null
+    }
     default:
       throw `mock-ipc: no handler for ${cmd}`
   }

@@ -8,6 +8,7 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 import { Handle, type NodeProps, Position } from "@xyflow/react"
 import { createContext, memo, type ReactNode, use } from "react"
+import { AgentMenu } from "./AgentMenu"
 import { type AgentNode, MODEL_LABEL } from "./agent"
 import { type Live, STATUS_LABEL, type Status, useLive } from "./status"
 
@@ -32,7 +33,8 @@ function AgentFrame({
   const live = useLive(id)
   return (
     <Agent value={{ data, live }}>
-      <div
+      <AgentMenu
+        name={data.name}
         data-status={live.status}
         className={cn(
           "group/agent relative bg-card text-card-foreground transition-[border-color] duration-200 ease-out",
@@ -60,7 +62,7 @@ function AgentFrame({
           position={Position.Bottom}
           className={HANDLE}
         />
-      </div>
+      </AgentMenu>
     </Agent>
   )
 }

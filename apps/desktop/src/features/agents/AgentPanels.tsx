@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react"
 import { type ReactNode, useCallback, useState } from "react"
 import { toEdge } from "@/features/board/link"
+import { useOpenTerminal } from "@/features/terminal/terminals"
 import { store } from "@/lib/store"
 import { StatusIcon } from "./AgentNode"
 import { type AgentNode, isAgent, MODEL_LABEL, ROLE_LABEL } from "./agent"
@@ -33,6 +34,7 @@ export function AgentInspector() {
 function Inspector({ agent }: { agent: AgentNode }) {
   const { status, action } = useLive(agent.id)
   const { name, model, branch, worktree } = agent.data
+  const openTerminal = useOpenTerminal()
   return (
     <aside
       aria-label="Agent inspector"
@@ -56,8 +58,12 @@ function Inspector({ agent }: { agent: AgentNode }) {
           {worktree}
         </Row>
       </dl>
-      {/* Terminals arrive with #8. */}
-      <Button variant="outline" className="mt-4 w-full" disabled>
+      <Button
+        variant="outline"
+        className="mt-4 w-full"
+        disabled={!openTerminal}
+        onClick={() => openTerminal?.(name)}
+      >
         <TerminalWindowIcon />
         Open terminal
       </Button>

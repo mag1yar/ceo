@@ -1,0 +1,12 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "clippy": {
+      "inputs": ["src-tauri/**", "!src-tauri/target/**", "!src-tauri/gen/**"]
+    },
+    "test:rust": {
+      "inputs": ["src-tauri/**", "!src-tauri/target/**", "!src-tauri/gen/**"]
+    }
+  }
+}

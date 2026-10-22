@@ -6,8 +6,9 @@ import {
   WarningCircleIcon,
 } from "@phosphor-icons/react"
 import { cn } from "@workspace/ui/lib/utils"
-import { Handle, type NodeProps, Position } from "@xyflow/react"
+import type { NodeProps } from "@xyflow/react"
 import { createContext, memo, type ReactNode, use } from "react"
+import { NodeHandles } from "@/features/board/NodeHandles"
 import { AgentMenu } from "./AgentMenu"
 import { type AgentNode, MODEL_LABEL } from "./agent"
 import { type Live, STATUS_LABEL, type Status, useLive } from "./status"
@@ -15,9 +16,6 @@ import { type Live, STATUS_LABEL, type Status, useLive } from "./status"
 type Ctx = { data: AgentNode["data"]; live: Live }
 const Agent = createContext<Ctx | null>(null)
 const useAgent = () => use(Agent) as Ctx
-
-const HANDLE =
-  "size-2! min-h-0! min-w-0! rounded-full border border-card bg-muted-foreground opacity-0 transition-opacity duration-150 ease-out group-hover/agent:opacity-100 [&.connectingto]:opacity-100 [&.connectingto:not(.valid)]:bg-destructive [&.valid]:bg-primary"
 
 // Shared frame: surface, status tint, selection and handles. Variants set shape and weight.
 function AgentFrame({
@@ -49,19 +47,8 @@ function AgentFrame({
             className="pointer-events-none absolute -inset-0.5 animate-agent-attention opacity-0 rounded-[inherit] border-2 border-agent-waiting motion-reduce:hidden"
           />
         )}
-        <Handle
-          type="target"
-          id="in"
-          position={Position.Top}
-          className={HANDLE}
-        />
         {children}
-        <Handle
-          type="source"
-          id="out"
-          position={Position.Bottom}
-          className={HANDLE}
-        />
+        <NodeHandles />
       </AgentMenu>
     </Agent>
   )

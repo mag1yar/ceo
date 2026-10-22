@@ -1,6 +1,5 @@
 import { cn } from "@workspace/ui/lib/utils"
 import {
-  Handle,
   type NodeProps,
   NodeResizer,
   NodeToolbar,
@@ -8,6 +7,7 @@ import {
   useReactFlow,
 } from "@xyflow/react"
 import { memo, useEffect, useState, useSyncExternalStore } from "react"
+import { NodeHandles } from "@/features/board/NodeHandles"
 import type { DiagramNode } from "./diagram"
 import { darkScheme, renderDiagram } from "./render"
 
@@ -107,7 +107,7 @@ export const DiagramNodeView = memo(function DiagramNodeView({
           </span>
         )}
       </div>
-      <DiagramHandles />
+      <NodeHandles />
     </div>
   )
 })
@@ -161,19 +161,4 @@ function DiagramEditor({
       )}
     </fieldset>
   )
-}
-
-const SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left]
-
-// Same handles as notes: every side is a source, and the board's loose mode lets any take a link.
-function DiagramHandles() {
-  return SIDES.map((side) => (
-    <Handle
-      key={side}
-      id={side}
-      type="source"
-      position={side}
-      className="size-2.5! rounded-full! border! border-primary! bg-background! opacity-0 transition-opacity duration-(--duration-fast) group-hover:opacity-100"
-    />
-  ))
 }

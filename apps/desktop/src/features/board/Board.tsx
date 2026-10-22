@@ -38,6 +38,7 @@ import {
 } from "@/lib/store"
 import { BoardToolbar } from "./BoardToolbar"
 import { edgeTypes } from "./edgeTypes"
+import { LinkConnectionLine } from "./LinkEdge"
 import { newLink, sameEdge, toBoardEdge, toEdge } from "./link"
 import { nodeTypes } from "./nodeTypes"
 import { newNote } from "./note"
@@ -216,12 +217,12 @@ function Canvas({
   const onConnect: OnConnect = useCallback(
     (c) => {
       const link = newLink(c)
+      // Ends float, so which dots were used does not make a second link different.
       const twin = latest.current.edges.some(
         (e) =>
           e.source === link.source &&
           e.target === link.target &&
-          e.sourceHandle === link.sourceHandle &&
-          e.targetHandle === link.targetHandle
+          e.type === link.type
       )
       if (c.source === c.target || twin) return
       record()
@@ -300,6 +301,7 @@ function Canvas({
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       connectionMode={ConnectionMode.Loose}
+      connectionLineComponent={LinkConnectionLine}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onDoubleClick={onDoubleClick}

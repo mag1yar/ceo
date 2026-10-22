@@ -1,6 +1,7 @@
 import { cn } from "@workspace/ui/lib/utils"
 import type { Node, NodeProps } from "@xyflow/react"
 import { memo } from "react"
+import { NodeHandles } from "./NodeHandles"
 
 export type CardNode = Node<{ title?: string }, "card">
 
@@ -17,6 +18,7 @@ export const CardNodeView = memo(function CardNodeView({
       )}
     >
       {data.title ?? "Card"}
+      <NodeHandles />
     </div>
   )
 })

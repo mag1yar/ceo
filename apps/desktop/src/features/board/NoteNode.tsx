@@ -1,14 +1,13 @@
 import { cn } from "@workspace/ui/lib/utils"
 import {
-  Handle,
   type NodeProps,
   NodeResizer,
   NodeToolbar,
-  Position,
   useReactFlow,
 } from "@xyflow/react"
 import { memo, type ReactNode, useCallback, useEffect, useState } from "react"
 import Markdown, { type Components } from "react-markdown"
+import { NodeHandles } from "./NodeHandles"
 import {
   freshNotes,
   NOTE_BG,
@@ -54,7 +53,7 @@ export const NoteNodeView = memo(function NoteNodeView({
       ) : (
         <NoteView text={data.text} onEdit={edit} />
       )}
-      <NoteHandles />
+      <NodeHandles />
     </NoteFrame>
   )
 })
@@ -168,19 +167,4 @@ function NoteColors({
       ))}
     </NodeToolbar>
   )
-}
-
-const SIDES = [Position.Top, Position.Right, Position.Bottom, Position.Left]
-
-// Every side is a source; the board's loose connection mode lets any handle also take a link.
-function NoteHandles() {
-  return SIDES.map((side) => (
-    <Handle
-      key={side}
-      id={side}
-      type="source"
-      position={side}
-      className="size-2.5! rounded-full! border! border-primary! bg-background! opacity-0 transition-opacity duration-(--duration-fast) group-hover:opacity-100"
-    />
-  ))
 }

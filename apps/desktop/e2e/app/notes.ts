@@ -55,24 +55,23 @@ describe("notes and links in the hidden app", () => {
       )
     )
 
-    // React Flow's handle drag listens to mouse events; drag from the first note's right edge to the second's left.
+    // React Flow's handle drag listens to mouse events; drag from the second note's top dot onto the first note's centre.
     await browser.executeAsync((done: () => void) => {
       const [a, b] = document.querySelectorAll(".react-flow__node-note")
       const center = (el: Element | null) => {
         const r = (el as Element).getBoundingClientRect()
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
       }
-      const from = center(b.querySelector(".react-flow__handle-right"))
-      const to = center(a.querySelector(".react-flow__handle-left"))
+      const dot = b.querySelector('.react-flow__handle[data-handleid="top"]')
+      const from = center(dot)
+      const to = center(a)
       const at = (i: number) => ({
         clientX: from.x + ((to.x - from.x) * i) / 10,
         clientY: from.y + ((to.y - from.y) * i) / 10,
         bubbles: true,
         view: window,
       })
-      b.querySelector(".react-flow__handle-right")?.dispatchEvent(
-        new MouseEvent("mousedown", { ...at(0), button: 0 })
-      )
+      dot?.dispatchEvent(new MouseEvent("mousedown", { ...at(0), button: 0 }))
       let i = 0
       const step = () => {
         if (++i <= 10) {
@@ -109,5 +108,48 @@ describe("notes and links in the hidden app", () => {
     const b = await invoke<Board>("board_load", { projectId })
     expect(b.edges[0].data).toMatchObject({ kind: "link" })
     expect(b.nodes.map((n) => n.width)).toEqual([220, 220])
+    // The floating ends sit on each note's outline, on the side facing the other note.
+    const ends = await browser.execute(() => {
+      const path = document.querySelector(
+        ".react-flow__edge-path"
+      ) as SVGPathElement
+      const ctm = path.getScreenCTM() as DOMMatrix
+      const at = (l: number) => path.getPointAtLength(l).matrixTransform(ctm)
+      const edge = path.closest(".react-flow__edge") as Element
+      const label = edge.getAttribute("aria-label") as string
+      const rect = (id: string) =>
+        (
+          document.querySelector(
+            `.react-flow__node[data-id="${id}"]`
+          ) as Element
+        ).getBoundingClientRect()
+      const [, source, target] = label.match(/from (\S+) to (\S+)/) ?? []
+      const box = (r: DOMRect) => ({
+        x: r.x,
+        y: r.y,
+        right: r.right,
+        bottom: r.bottom,
+        cx: r.x + r.width / 2,
+        cy: r.y + r.height / 2,
+      })
+      const p = (q: DOMPoint) => ({ x: q.x, y: q.y })
+      return {
+        start: p(at(0)),
+        end: p(at(path.getTotalLength())),
+        source: box(rect(source)),
+        target: box(rect(target)),
+      }
+    })
+    type B = typeof ends.source
+    const onOutline = (q: { x: number; y: number }, r: B) =>
+      [q.x - r.x, r.right - q.x, q.y - r.y, r.bottom - q.y].some(
+        (d) => Math.abs(d) < 2
+      )
+    const facing = (q: { x: number; y: number }, r: B, o: B) =>
+      (q.x - r.cx) * (o.cx - r.cx) + (q.y - r.cy) * (o.cy - r.cy) > 0
+    expect(onOutline(ends.start, ends.source)).toBe(true)
+    expect(onOutline(ends.end, ends.target)).toBe(true)
+    expect(facing(ends.start, ends.source, ends.target)).toBe(true)
+    expect(facing(ends.end, ends.target, ends.source)).toBe(true)
   })
 })

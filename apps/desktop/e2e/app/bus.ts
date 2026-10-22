@@ -23,6 +23,43 @@ type Win = {
   e2e: { terminals: Record<string, Term> }
   __TAURI_INTERNALS__: Internals
   busLog: Message[]
+  motion: Motion
+}
+// What the watcher in `watchMotion` saw, ms on the page clock.
+type Motion = {
+  signals: Record<
+    string,
+    {
+      states: Record<string, number>
+      absorb?: string[]
+      pulse?: string[]
+      gone?: number
+    }
+  >
+  nodes: Record<
+    string,
+    { enter?: string[]; leave?: string[]; leaving?: number; gone?: number }
+  >
+  hold: string[]
+  held: string
+}
+
+// Waits until the watcher holds `what`, saves the board as it is, then lets everything play on.
+async function shoot(what: string, file: string) {
+  await browser.waitUntil(
+    () =>
+      browser.execute(
+        (what) => (window as unknown as Win).motion.held === what,
+        what
+      ),
+    { timeout: 30000, timeoutMsg: `${what} was never held` }
+  )
+  await browser.saveScreenshot(`test-results-app/${file}-${await scheme()}.png`)
+  await browser.execute(() => {
+    for (const a of document.getAnimations())
+      if (a.playState === "paused") a.play()
+    ;(window as unknown as Win).motion.held = ""
+  })
 }
 
 const ceo = {
@@ -70,6 +107,91 @@ const node = (id: string) => $(`.react-flow__node[data-id="${id}"]`)
 const executors = () => $$(".react-flow__node-executor")
 const busLog = () =>
   browser.execute(() => (window as unknown as Win).busLog) as Promise<Message[]>
+
+// Records each signal's states, its animations once accepted and when it leaves the DOM, and each executor node's animations and times as it mounts and leaves.
+// Also holds the executor's enter and a report in transit halfway, once each, for a screenshot.
+const watchMotion = () =>
+  browser.execute(() => {
+    const motion: Motion = {
+      signals: {},
+      nodes: {},
+      hold: ["enter", "transit"],
+      held: "",
+    }
+    // Early in the enter, where the strong ease-out still shows it; halfway through a trip.
+    const hold = (what: string, el: Element, at: (ms: number) => number) => {
+      const anims = el.getAnimations()
+      if (!motion.hold.includes(what) || !anims.length) return
+      motion.hold = motion.hold.filter((x) => x !== what)
+      for (const a of anims) {
+        a.pause()
+        a.currentTime = at(Number(a.effect?.getTiming().duration))
+      }
+      motion.held = what
+    }
+    ;(window as unknown as Win).motion = motion
+    const running = (el: Element) => {
+      getComputedStyle(el).opacity
+      return el
+        .getAnimations({ subtree: true })
+        .filter((a) => a.playState === "running")
+        .map((a) => {
+          const props =
+            a instanceof CSSTransition
+              ? [a.transitionProperty]
+              : (a.effect as KeyframeEffect)
+                  .getKeyframes()
+                  .flatMap((k) => Object.keys(k))
+                  .filter((k) => !/offset|easing|composite/i.test(k))
+          return `${[...new Set(props)].join("+")} ${a.effect?.getTiming().duration}`
+        })
+    }
+    const scan = () => {
+      const now = performance.now()
+      for (const el of document.querySelectorAll<HTMLElement>(
+        "[data-slot=signal]"
+      )) {
+        const id = el.dataset.message ?? ""
+        motion.signals[id] ??= { states: {} }
+        const s = motion.signals[id]
+        s.states[el.dataset.state ?? ""] ??= now
+        if (el.dataset.kind === "report" && !s.states.accepted)
+          hold("transit", el, (ms) => ms / 2)
+        if (el.dataset.state === "accepted") {
+          s.absorb ??= running(el)
+          const pulse = document.querySelector(
+            `[data-slot=signal-pulse][data-message="${el.dataset.message}"]`
+          )
+          if (pulse) s.pulse ??= running(pulse)
+        }
+      }
+      for (const [id, s] of Object.entries(motion.signals))
+        if (!document.querySelector(`[data-message="${id}"]`)) s.gone ??= now
+      for (const [id, n] of Object.entries(motion.nodes))
+        if (!document.querySelector(`.react-flow__node[data-id="${id}"]`))
+          n.gone ??= now
+      for (const el of document.querySelectorAll<HTMLElement>(
+        ".react-flow__node-executor"
+      )) {
+        const id = el.dataset.id ?? ""
+        motion.nodes[id] ??= {}
+        const n = motion.nodes[id]
+        n.enter ??= running(el)
+        if (el.firstElementChild)
+          hold("enter", el.firstElementChild, (ms) => ms / 6)
+        if (el.classList.contains("leaving")) {
+          n.leaving ??= now
+          n.leave ??= running(el)
+        }
+      }
+    }
+    new MutationObserver(scan).observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class", "data-state"],
+    })
+  })
 
 async function scheme() {
   return (await browser.execute(
@@ -242,6 +364,72 @@ describe("bus: the CEO spawns an executor that reports back", function () {
     expect(board.edges).toEqual([])
   })
 
+  it("a report typed into the idle CEO waits there, is absorbed on accept and leaves nothing behind", async () => {
+    await watchMotion()
+    await node(ceo.id).$("button[aria-label='Focus terminal']").click()
+    await browser.execute(
+      (id) =>
+        (window as unknown as Win).e2e.terminals[id].input(
+          "Add a hello file while I idle\r",
+          true
+        ),
+      ceo.id
+    )
+    await node(ceo.id).$("button[aria-label='Exit focus']").click()
+    await browser.waitUntil(async () => (await executors().length) === 1, {
+      timeout: 20000,
+      timeoutMsg: "no executor node appeared",
+    })
+    const execId = (await executors()[0].getAttribute("data-id")) as string
+    await shoot("enter", "executor-enter")
+    await shoot("transit", "signal-transit")
+    const report = async () =>
+      (await busLog()).find((m) => m.kind === "report" && m.from === execId)
+    await browser.waitUntil(async () => !!(await report()), {
+      timeout: 30000,
+      timeoutMsg: "no report",
+    })
+    const id = (await report())?.id as string
+    await $(`[data-slot=signal][data-message="${id}"]`).waitForExist({
+      timeout: 5000,
+    })
+    await $(
+      `[data-slot=signal][data-message="${id}"][data-state=waiting]`
+    ).waitForExist({ timeout: 5000, timeoutMsg: "the report never waited" })
+    await browser.waitUntil(async () => (await executors().length) === 0, {
+      timeout: 60000,
+      timeoutMsg: "the executor node stayed on the board",
+    })
+    const states = (await busLog())
+      .filter((m) => m.id === id)
+      .map((m) => `${m.state} ${m.deliveredVia ?? ""}`.trim())
+    expect(states).toEqual(["sent", "waiting typed", "accepted typed"])
+
+    // Nothing is left at the CEO once the executor is gone.
+    await browser.pause(1000)
+    expect(await $$("[data-slot=signal]").length).toBe(0)
+    const motion = (await browser.execute(
+      () => (window as unknown as Win).motion
+    )) as Motion
+    const s = motion.signals[id]
+    console.log(`signal motion: ${JSON.stringify(s)}`)
+    console.log(`executor motion: ${JSON.stringify(motion.nodes[execId])}`)
+    expect(s.states.waiting).toBeGreaterThan(0)
+    // The merge and the receiver's pulse play to the end, though the sender leaves the board meanwhile.
+    expect(s.absorb?.join()).toMatch(/transform\+opacity/)
+    expect(s.pulse?.join()).toMatch(/opacity/)
+    const merged = (s.gone ?? Infinity) - s.states.accepted
+    expect(merged).toBeGreaterThanOrEqual(300)
+    expect(merged).toBeLessThan(1000)
+    // The executor node's enter and leave really run in the system WebKit, and it stays until its leave is over.
+    const n = motion.nodes[execId]
+    expect(n.enter?.join()).toMatch(/opacity/)
+    expect(n.enter?.join()).toMatch(/transform/)
+    expect(n.leave?.join()).toMatch(/opacity/)
+    expect(n.leave?.join()).toMatch(/transform/)
+    expect((n.gone ?? 0) - (n.leaving ?? Infinity)).toBeGreaterThanOrEqual(180)
+  })
+
   it("leaves no tmux session or worktree of the project behind", async () => {
     const sessions = (await invoke<AgentSession[]>("session_list")).filter(
       (s) => s.projectId === projectId
@@ -254,9 +442,10 @@ describe("bus: the CEO spawns an executor that reports back", function () {
     )
     expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1)
     expect(trusted()[ceoTrustKey]).toBeUndefined()
-    // Only the executor's branch stays: the owner merges it.
-    expect(git(repo, "branch", "--list", "ceo/*")).toMatch(
-      /^\s*ceo\/exec-add-a-hello-file-\w+$/
-    )
+    // Only the executors' branches stay: the owner merges them.
+    const branches = git(repo, "branch", "--list", "ceo/*").split("\n")
+    expect(branches).toHaveLength(2)
+    for (const b of branches)
+      expect(b).toMatch(/^\s*ceo\/exec-add-a-hello-file-/)
   })
 })

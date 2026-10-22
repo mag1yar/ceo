@@ -143,6 +143,23 @@ test("a signal travels the edge, waits at the receiver, then is absorbed", async
 
   await send({ id: "m", from: "a", to: "b", state: "accepted" })
   await expect(dot).toHaveAttribute("data-state", "accepted")
+  // The dot merges into b's outline, stretched along the path, and b's outline pulses once.
+  const merge = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('[data-message="m"]')]
+      .map((el) => {
+        const [a] = el.getAnimations()
+        const keys = (a?.effect as KeyframeEffect | undefined)
+          ?.getKeyframes()
+          .flatMap((k) => Object.keys(k))
+          .filter((k) => k === "opacity" || k === "transform")
+        return `${el.dataset.slot} ${[...new Set(keys)].sort().join("+")} ${a?.effect?.getComputedTiming().endTime}`
+      })
+      .sort()
+  )
+  expect(merge).toEqual([
+    "signal opacity+transform 200",
+    "signal-pulse opacity+transform 420",
+  ])
   await expect(dot).toHaveCount(0)
   await expect(page.locator("[data-slot=signal]")).toHaveCount(0)
 })

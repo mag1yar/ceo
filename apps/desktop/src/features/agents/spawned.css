@@ -1,39 +1,24 @@
-/* Bus-spawned executors and their links: in on the visual root (React Flow owns the wrapper's transform), out in reverse. */
-.react-flow__node.spawned > *,
-.react-flow__node.leaving > * {
-  transition-property: width, height, border-color, opacity, transform;
-  transition-duration:
-    var(--duration-move), var(--duration-move), var(--duration-move),
-    var(--duration-slow), var(--duration-slow);
-  transition-timing-function:
-    var(--ease-spring), var(--ease-spring), var(--ease-spring), var(--ease-out),
-    var(--ease-out);
+/* Bus-spawned executors and their links: in on the visual root (React Flow owns the wrapper's transform); useSpawned plays the leave.
+   An animation, not a transition, so the root keeps its own size transitions and the leave never triggers one. */
+.react-flow__node.spawned > * {
+  animation: spawn-in var(--duration-slow) var(--ease-out) both;
 }
-.react-flow__edge.spawned .react-flow__edge-path,
-.react-flow__edge.leaving .react-flow__edge-path {
-  transition: opacity var(--duration-base) var(--ease-out);
+.react-flow__edge.spawned .react-flow__edge-path {
+  animation: spawn-fade var(--duration-slow) var(--ease-out) both;
 }
 
-@starting-style {
-  .react-flow__node.spawned > * {
+@keyframes spawn-in {
+  from {
     opacity: 0;
-    transform: scale(0.96);
+    transform: scale(0.9);
   }
-  .react-flow__edge.spawned .react-flow__edge-path {
+}
+@keyframes spawn-fade {
+  from {
     opacity: 0;
   }
 }
 
-.react-flow__node.leaving > * {
-  opacity: 0;
-  transform: scale(0.96);
-  transition-duration:
-    var(--duration-move), var(--duration-move), var(--duration-move),
-    var(--duration-base), var(--duration-base);
-}
-.react-flow__edge.leaving .react-flow__edge-path {
-  opacity: 0;
-}
 .react-flow__node.leaving,
 .react-flow__node.leaving *,
 .react-flow__edge.leaving * {
@@ -41,12 +26,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  @starting-style {
-    .react-flow__node.spawned > * {
-      transform: none;
-    }
-  }
-  .react-flow__node.leaving > * {
-    transform: none;
+  .react-flow__node.spawned > * {
+    animation-name: spawn-fade;
   }
 }

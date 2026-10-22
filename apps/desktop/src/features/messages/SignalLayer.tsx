@@ -24,7 +24,10 @@ import { track } from "./track"
 const GAP = 14
 const EASE_IN_OUT = "cubic-bezier(0.77, 0, 0.175, 1)" // --ease-in-out
 const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)" // --ease-out
-const ABSORB_MS = 200
+const MERGE_MS = 200 // --duration-base
+const PULSE_MS = 300 // --duration-slow
+// The share of the merge at which the drop touches the receiver's outline and the pulse starts.
+const TOUCH = 0.6
 // A short hop stays readable, a long edge stays brief.
 const travelMs = (length: number) => Math.min(1200, Math.max(450, length * 1.2))
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -122,12 +125,20 @@ const Signal = memo(function Signal({
   ask: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const pulse = useRef<HTMLDivElement>(null)
   const first = useRef(m.state).current
   const d = usePath(m.from, m.to, route)
-  const path = useMemo(() => (d ? track(d, gap) : null), [d, gap])
+  const live = useMemo(() => (d ? track(d, gap) : null), [d, gap])
+  const accepted = m.state === "accepted"
+  // Once accepted the signal keeps its last path, so the merge plays out while the sender leaves the board.
+  const last = useRef(live)
+  useLayoutEffect(() => {
+    if (live && !accepted) last.current = live
+  })
+  const path = accepted ? last.current : live
+  const receiver = useInternalNode(m.to)
   const travel = useRef<Animation>(null)
   const [arrived, setArrived] = useState(() => first !== "sent" || reduced())
-  const accepted = m.state === "accepted"
   const folded = count === 0 && arrived
   // An accepted message keeps the visibility it had while waiting.
   const wasFolded = useRef(false)
@@ -161,6 +172,7 @@ const Signal = memo(function Signal({
     )
   }, [path, arrived])
 
+  // The drop merges into the receiver's outline, stretching along the path as it shrinks, and the outline answers with one pulse.
   useLayoutEffect(() => {
     const el = ref.current
     if (
@@ -176,56 +188,103 @@ const Signal = memo(function Signal({
     travel.current?.finish()
     const [sx, sy] = path.stop
     const [ex, ey] = path.end
+    const still = reduced()
+    // Stretch along the path without turning the marker: rotate in, scale, rotate back.
+    const turn = Math.atan2(ey - sy, ex - sx)
+    const at = (t: number, along: number, across: number) =>
+      `translate(${sx + (ex - sx) * t}px, ${sy + (ey - sy) * t}px) rotate(${turn}rad) scale(${along}, ${across}) rotate(${-turn}rad)`
     el.animate(
-      reduced()
+      still
         ? [{ opacity: 1 }, { opacity: 0 }]
         : [
-            { transform: `translate(${sx}px, ${sy}px) scale(1)`, opacity: 1 },
-            { transform: `translate(${ex}px, ${ey}px) scale(0.4)`, opacity: 0 },
+            { transform: at(0, 1, 1), opacity: 1 },
+            { transform: at(TOUCH, 1.5, 0.7), opacity: 1, offset: TOUCH },
+            { transform: at(1, 0.4, 0.3), opacity: 0 },
           ],
-      { duration: ABSORB_MS, easing: EASE_OUT, fill: "forwards" }
+      {
+        duration: MERGE_MS,
+        easing: still ? EASE_OUT : EASE_IN_OUT,
+        fill: "forwards",
+      }
     )
-  }, [accepted, first, path])
+    const ring = pulse.current
+    if (!ring) return
+    const node = document.querySelector(
+      `.react-flow__node[data-id="${CSS.escape(m.to)}"] > *`
+    )
+    if (node) ring.style.borderRadius = getComputedStyle(node).borderRadius
+    ring.animate(
+      still
+        ? [{ opacity: 0 }, { opacity: 0.5, offset: 0.3 }, { opacity: 0 }]
+        : [
+            { opacity: 0, transform: "scale(1)" },
+            { opacity: 0.5, offset: 0.3 },
+            { opacity: 0, transform: "scale(1.03)" },
+          ],
+      {
+        duration: PULSE_MS,
+        delay: still ? 0 : MERGE_MS * TOUCH,
+        easing: EASE_OUT,
+        fill: "both",
+      }
+    )
+  }, [accepted, first, path, m.to])
 
   if (!path || first === "accepted") return null
   const [x, y] = path.stop
+  const box = receiver?.measured.width ? receiver : undefined
   return (
-    <div
-      ref={ref}
-      data-slot="signal"
-      data-message={m.id}
-      data-kind={m.kind}
-      data-state={m.state}
-      data-count={count}
-      className="absolute top-0 left-0 transition-opacity duration-(--duration-fast)"
-      style={{
-        transform: `translate(${x}px, ${y}px)`,
-        opacity: hidden ? 0 : undefined,
-      }}
-    >
-      {count > 1 ? (
-        <span
-          className={cn(
-            "absolute grid h-4 min-w-4 -translate-1/2 scale-(--signal-scale) place-items-center px-1 text-[10px] leading-none font-semibold tabular-nums ring-2 ring-background",
-            ask
-              ? "rounded-[3px] bg-signal-ask text-signal-ask-foreground"
-              : "rounded-full bg-signal text-primary-foreground"
-          )}
-        >
-          {count}
-        </span>
-      ) : (
-        // Ask is a diamond, the rest are dots: shape tells them apart, not colour alone.
-        <span
-          className={cn(
-            "absolute block -translate-1/2 scale-(--signal-scale) ring-2 ring-background",
-            ask
-              ? "size-2.5 rotate-45 rounded-[2px] bg-signal-ask"
-              : "size-2 rounded-full bg-signal"
-          )}
+    <>
+      {accepted && !hidden && box && (
+        <div
+          ref={pulse}
+          data-slot="signal-pulse"
+          data-message={m.id}
+          className="absolute top-0 left-0 border-signal opacity-0 [border-width:calc(2px*var(--signal-scale))]"
+          style={{
+            translate: `${box.internals.positionAbsolute.x}px ${box.internals.positionAbsolute.y}px`,
+            width: box.measured.width,
+            height: box.measured.height,
+          }}
         />
       )}
-    </div>
+      <div
+        ref={ref}
+        data-slot="signal"
+        data-message={m.id}
+        data-kind={m.kind}
+        data-state={m.state}
+        data-count={count}
+        className="absolute top-0 left-0 transition-opacity duration-(--duration-fast)"
+        style={{
+          transform: `translate(${x}px, ${y}px)`,
+          opacity: hidden ? 0 : undefined,
+        }}
+      >
+        {count > 1 ? (
+          <span
+            className={cn(
+              "absolute grid h-4 min-w-4 -translate-1/2 scale-(--signal-scale) place-items-center px-1 text-[10px] leading-none font-semibold tabular-nums ring-2 ring-background",
+              ask
+                ? "rounded-[3px] bg-signal-ask text-signal-ask-foreground"
+                : "rounded-full bg-signal text-primary-foreground"
+            )}
+          >
+            {count}
+          </span>
+        ) : (
+          // Ask is a diamond, the rest are dots: shape tells them apart, not colour alone.
+          <span
+            className={cn(
+              "absolute block -translate-1/2 scale-(--signal-scale) ring-2 ring-background",
+              ask
+                ? "size-2.5 rotate-45 rounded-[2px] bg-signal-ask"
+                : "size-2 rounded-full bg-signal"
+            )}
+          />
+        )}
+      </div>
+    </>
   )
 })
 

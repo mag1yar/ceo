@@ -5,6 +5,7 @@ import type { BoardEdge, BoardNode } from "../src/lib/store"
 type Ipc = { invoke: (cmd: string, args?: object) => Promise<unknown> }
 type Win = {
   __TAURI_INTERNALS__: Ipc
+  specInvoke?: Ipc["invoke"]
   __ceoBus: { board: (c: object) => Promise<void> }
 }
 
@@ -30,10 +31,13 @@ const link: BoardEdge = {
   data: { kind: "spawn" },
 }
 
+// The spec's own calls skip the save recorder.
 const ipc = (page: Page, cmd: string, args: object) =>
   page.evaluate(
-    ({ cmd, args }) =>
-      (window as unknown as Win).__TAURI_INTERNALS__.invoke(cmd, args),
+    ({ cmd, args }) => {
+      const w = window as unknown as Win
+      return (w.specInvoke ?? w.__TAURI_INTERNALS__.invoke)(cmd, args)
+    },
     { cmd, args }
   )
 
@@ -52,9 +56,7 @@ const board = (page: Page, projectId: string) =>
     edges: BoardEdge[]
   }>
 
-test("a spawned executor joins the open board, survives undo and leaves only when Rust removes it", async ({
-  page,
-}) => {
+async function open(page: Page) {
   await page.goto("/")
   await expect(page.locator("[data-slot=app-shell]")).toBeVisible()
   const projectId = await page.evaluate(async (ceo) => {
@@ -70,9 +72,86 @@ test("a spawned executor joins the open board, survives undo and leaves only whe
     return p.id
   }, ceo)
   await page.reload()
+  await expect(page.locator(".react-flow__node-ceo")).toHaveCount(1)
+  return projectId
+}
+
+// On the first frame `selector` matches: the properties its running transitions animate.
+const transitions = (page: Page, selector: string) =>
+  page.evaluate(async (selector) => {
+    for (;;) {
+      const el = document.querySelector(selector)
+      if (el)
+        return el
+          .getAnimations()
+          .map((a) => (a as CSSTransition).transitionProperty)
+          .sort()
+      await new Promise(requestAnimationFrame)
+    }
+  }, selector)
+
+const root = ".react-flow__node-executor > *"
+const path = ".react-flow__edge .react-flow__edge-path"
+
+for (const reduced of [false, true])
+  test(`a spawned executor and its link animate in and out${reduced ? ", opacity only under reduced motion" : ""}`, async ({
+    page,
+  }) => {
+    if (reduced) await page.emulateMedia({ reducedMotion: "reduce" })
+    const projectId = await open(page)
+    // Every board_save the app sends, to prove the motion flags never reach the store.
+    await page.evaluate(() => {
+      const ipc = (window as unknown as Win).__TAURI_INTERNALS__
+      const invoke = ipc.invoke
+      const saves: unknown[] = []
+      Object.assign(window, { saves, specInvoke: invoke })
+      ipc.invoke = (cmd, args) => {
+        if (cmd === "board_save") saves.push(args)
+        return invoke(cmd, args)
+      }
+    })
+    const motion = reduced ? ["opacity"] : ["opacity", "transform"]
+
+    const entering = transitions(page, root)
+    const edgeIn = transitions(page, path)
+    await rust(page, projectId, { upsertNodes: [exec], upsertEdges: [link] })
+    expect(await entering).toEqual(motion)
+    expect(await edgeIn).toEqual(["opacity"])
+
+    // Rust retires it: still on the board, marked and inert, until the fade ends.
+    const leaving = transitions(page, `.react-flow__node-executor.leaving > *`)
+    const edgeOut = transitions(
+      page,
+      `.react-flow__edge.leaving .react-flow__edge-path`
+    )
+    await rust(page, projectId, { deleteNodeIds: [exec.id] })
+    expect(await leaving).toEqual(motion)
+    expect(await edgeOut).toEqual(["opacity"])
+    // A second delete while it leaves changes nothing.
+    await rust(page, projectId, { deleteNodeIds: [exec.id] })
+    await expect(page.locator(".react-flow__node-executor")).toHaveCount(0)
+    await expect(page.locator(".react-flow__edge")).toHaveCount(0)
+
+    // Past the board's save debounce, so any flush the removal caused is recorded.
+    await page.waitForTimeout(1000)
+    const saves = JSON.stringify(
+      await page.evaluate(
+        () => (window as unknown as { saves: unknown[] }).saves
+      )
+    )
+    expect(saves).not.toMatch(/spawned|leaving|className/)
+    expect(saves).not.toContain(exec.id)
+    expect((await board(page, projectId)).nodes.map((n) => n.id)).toEqual([
+      ceo.id,
+    ])
+  })
+
+test("a spawned executor joins the open board, survives undo and leaves only when Rust removes it", async ({
+  page,
+}) => {
+  const projectId = await open(page)
   const executors = page.locator(".react-flow__node-executor")
   const notes = page.locator(".react-flow__node-note")
-  await expect(page.locator(".react-flow__node-ceo")).toHaveCount(1)
 
   // An undo step taken before the spawn.
   await page

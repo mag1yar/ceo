@@ -9,6 +9,8 @@ import {
 } from "react"
 import { toEdge, toNode } from "@/features/board/link"
 import type { BoardChanges, BoardEdge, BoardNode } from "@/lib/store"
+import { focusedId, toggleFocus } from "./AgentTerminals"
+import "./spawned.css"
 
 // Rust emits this when the bus adds or removes board items: a spawned executor and its link to the CEO.
 export const BOARD_EVENT = "board://changes"
@@ -23,6 +25,28 @@ const ownedNode = (n: BoardNode) => n.type === "executor"
 const ownedEdge = (e: BoardEdge) =>
   (e.data as { kind?: string } | null)?.kind === "spawn"
 
+// Motion classes live on the React Flow item only, never in its data, so the save and the store never see them.
+const spawn = <T extends Node | Edge>(x: T): T => ({
+  ...x,
+  className: "spawned",
+})
+const leave = <T extends Node | Edge>(x: T): T => ({
+  ...x,
+  className: "leaving",
+  selected: false,
+  selectable: false,
+  focusable: false,
+  deletable: false,
+  draggable: false,
+  connectable: false,
+})
+const leaveMs = () =>
+  Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      "--duration-base"
+    )
+  ) || 0
+
 // Rust owns these items, so the board's diff-based save must never delete or revive them; undo and redo are corrected.
 export function useSpawned(
   projectId: string,
@@ -36,11 +60,13 @@ export function useSpawned(
     nodes: Map<string, BoardNode>
     edges: Map<string, BoardEdge>
     removed: Set<string>
+    leaving: Set<string>
   }>(null)
   owned.current ??= {
     nodes: new Map([...saved.current.nodes].filter(([, n]) => ownedNode(n))),
     edges: new Map([...saved.current.edges].filter(([, e]) => ownedEdge(e))),
     removed: new Set(),
+    leaving: new Set(),
   }
 
   useEffect(() => {
@@ -48,20 +74,19 @@ export function useSpawned(
       const o = owned.current
       if (c.projectId !== projectId || !o) return
       const s = saved.current
-      const gone = new Set(c.deleteNodeIds)
+      // A delete for an executor already on its way out is a no-op.
+      const gone = new Set(c.deleteNodeIds?.filter((id) => !o.leaving.has(id)))
       const goneEdge = (e: { id: string; source: string; target: string }) =>
         gone.has(e.source) ||
         gone.has(e.target) ||
         !!c.deleteEdgeIds?.includes(e.id)
-      for (const map of [o.nodes, s.nodes])
-        for (const id of gone) map.delete(id)
-      for (const map of [o.edges, s.edges])
-        for (const [id, e] of map)
-          if (goneEdge(e)) {
-            map.delete(id)
-            o.removed.add(id)
-          }
-      for (const id of gone) o.removed.add(id)
+      // Leaving items stay in `saved` until they are gone from the board too, so no flush puts them back.
+      for (const id of gone) {
+        o.nodes.delete(id)
+        o.leaving.add(id)
+        if (focusedId() === id) toggleFocus(id)
+      }
+      for (const [id, e] of o.edges) if (goneEdge(e)) o.edges.delete(id)
       const addN = c.upsertNodes ?? []
       const addE = c.upsertEdges ?? []
       for (const n of addN)
@@ -71,13 +96,32 @@ export function useSpawned(
       const newN = new Set(addN.map((n) => n.id))
       const newE = new Set(addE.map((e) => e.id))
       setNodes((ns) => [
-        ...ns.filter((n) => !gone.has(n.id) && !newN.has(n.id)),
-        ...addN.map(toNode),
+        ...ns
+          .filter((n) => !newN.has(n.id))
+          .map((n) => (gone.has(n.id) ? leave(n) : n)),
+        ...addN.map((n) => spawn(toNode(n))),
       ])
       setEdges((es) => [
-        ...es.filter((e) => !goneEdge(e) && !newE.has(e.id)),
-        ...addE.map(toEdge),
+        ...es
+          .filter((e) => !newE.has(e.id))
+          .map((e) => (goneEdge(e) ? leave(e) : e)),
+        ...addE.map((e) => spawn(toEdge(e))),
       ])
+      if (!gone.size && !c.deleteEdgeIds?.length) return
+      setTimeout(() => {
+        for (const id of gone) {
+          s.nodes.delete(id)
+          o.leaving.delete(id)
+          o.removed.add(id)
+        }
+        for (const [id, e] of s.edges)
+          if (goneEdge(e)) {
+            s.edges.delete(id)
+            o.removed.add(id)
+          }
+        setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
+        setEdges((es) => es.filter((e) => !goneEdge(e)))
+      }, leaveMs())
     })
     return () => {
       off.then((f) => f()).catch(console.error)

@@ -15,6 +15,9 @@ function board(projectId: string) {
   return boards.get(projectId) ?? { viewport: {}, nodes: [], edges: [] }
 }
 
+const e2e = () =>
+  (window as { e2e?: { folder?: string; gitFolders?: string[] } }).e2e ?? {}
+
 const byId = (x: { id: string }, y: { id: string }) =>
   x.id < y.id ? -1 : x.id > y.id ? 1 : 0
 
@@ -93,6 +96,11 @@ function handle(cmd: string, payload: unknown) {
         b.edges = [...b.edges.filter((x) => x.id !== e.id), e]
       return null
     }
+    // Specs set window.e2e: the folder the dialog "picks" and which folders are git repos.
+    case "plugin:dialog|open":
+      return e2e().folder ?? null
+    case "project_is_git":
+      return e2e().gitFolders?.includes(a.path) ?? false
     default:
       throw `mock-ipc: no handler for ${cmd}`
   }

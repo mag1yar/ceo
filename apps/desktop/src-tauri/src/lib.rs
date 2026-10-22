@@ -1,5 +1,6 @@
 #[cfg(feature = "e2e")]
 mod e2e;
+mod git;
 mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -8,6 +9,7 @@ pub fn run() {
     #[cfg(feature = "e2e")]
     let builder = e2e::builder(builder);
     builder
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             #[cfg(feature = "e2e")]
             e2e::setup(app);
@@ -22,6 +24,7 @@ pub fn run() {
             store::project_reorder,
             store::board_load,
             store::board_save,
+            git::project_is_git,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

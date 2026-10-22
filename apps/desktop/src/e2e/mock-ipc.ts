@@ -2,8 +2,11 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks"
 import type { Board, BoardChanges, Project } from "@/lib/store"
 
-const projects: Project[] = []
-const boards = new Map<string, Board>()
+// Snapshot in sessionStorage so specs can check persistence across page.reload().
+const KEY = "ceo.e2e.mock-ipc"
+const saved = JSON.parse(sessionStorage.getItem(KEY) ?? "{}")
+const projects: Project[] = saved.projects ?? []
+const boards = new Map<string, Board>(saved.boards)
 
 function project(id: string) {
   const p = projects.find((p) => p.id === id)
@@ -20,7 +23,11 @@ const byId = (x: { id: string }, y: { id: string }) =>
 
 mockWindows("main")
 // Copies, like real IPC: callers must never hold references into the mock store.
-mockIPC((cmd, payload) => structuredClone(handle(cmd, payload)))
+mockIPC((cmd, payload) => {
+  const result = structuredClone(handle(cmd, payload))
+  sessionStorage.setItem(KEY, JSON.stringify({ projects, boards: [...boards] }))
+  return result
+})
 
 // Mirrors the Rust store's ordering and errors so headless specs see what the real app does.
 function handle(cmd: string, payload: unknown) {

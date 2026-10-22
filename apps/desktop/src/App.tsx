@@ -8,8 +8,15 @@ import {
   SidebarHeader,
   SidebarTrigger,
 } from "@workspace/ui/components/app-shell"
+import { useEffect, useState } from "react"
+import { Board } from "@/features/board/Board"
+import { store } from "@/lib/store"
 
 export function App() {
+  const [projectId, setProjectId] = useState<string>()
+  useEffect(() => {
+    store.listProjects().then((ps) => setProjectId(ps[0]?.id), console.error)
+  }, [])
   return (
     <AppShell>
       <Sidebar>
@@ -30,7 +37,11 @@ export function App() {
         </MainHeader>
         <MainContent className="items-center justify-center">
           {/* Slot: board (#5). */}
-          <p className="text-sm text-muted-foreground">No project selected</p>
+          {projectId ? (
+            <Board key={projectId} projectId={projectId} />
+          ) : (
+            <p className="text-sm text-muted-foreground">No project selected</p>
+          )}
         </MainContent>
       </Main>
       <SidebarTrigger />

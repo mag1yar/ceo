@@ -39,6 +39,7 @@ test("sidebar width survives a reload", async ({ page }) => {
 
 test("store commands reach the in-memory IPC mock", async ({ page }) => {
   await page.goto("/")
+  await expect(page.locator("[data-slot=app-shell]")).toBeVisible()
   const result = await page.evaluate(async () => {
     const url = "/src/lib/store/index.ts"
     const { store }: typeof import("../src/lib/store") = await import(url)

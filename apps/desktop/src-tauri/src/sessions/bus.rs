@@ -1,6 +1,6 @@
 //! The agent bus: tools by role, links checked here, and delivery into an idle pane or the next hook of a busy one.
 
-use super::{Res, Sessions, report, uuid};
+use super::{Res, Sessions, hooks, report, uuid};
 use crate::store::{AgentSession, BoardChanges, BoardEdge, BoardNode, Message, Store};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -167,9 +167,11 @@ fn dispatch<R: Runtime>(
             app.state::<Sessions>()
                 .tmux()?
                 .key(&to.tmux_name, "Escape")?;
-            // An Esc interrupt never fires Stop, so the pane is idle by our word.
+            // An Esc interrupt never fires Stop, so the pane is idle by our word; a booting one stays "Starting".
             std::thread::sleep(Duration::from_millis(300));
-            report(app, &to.project_id, &to.node_id, "idle", "Interrupted");
+            if to.action != "Starting" {
+                report(app, &to.project_id, &to.node_id, "idle", "Interrupted");
+            }
             send(app, row, &to, "send", body, None).map(|m| format!("Interrupted, sent {}.", m.id))
         }
         ("ceo", "stop") => {
@@ -187,6 +189,12 @@ fn dispatch<R: Runtime>(
                 .message(id)?
                 .filter(|m| m.to == row.node_id && m.project_id == row.project_id);
             let ask = ask.ok_or_else(|| format!("no message {id} addressed to you"))?;
+            if ask.kind != "ask" {
+                return Err(format!(
+                    "message {id} is a {}, not an ask; call mcp__ceo__accept for it",
+                    ask.kind
+                ));
+            }
             let to = peer(&store, row, &ask.from)?;
             let r = send(app, row, &to, "reply", arg("body")?, Some(&ask.thread))?;
             // Replying is accepting; an ask accepted earlier stays as it is.
@@ -337,7 +345,7 @@ pub fn deliver_by_hook<R: Runtime>(
     (!list.is_empty()).then(|| render(&list))
 }
 
-/// Types a short pointer into an idle pane that has undelivered messages; never into a busy one.
+/// Types a short pointer into an idle pane with an empty prompt that has undelivered messages; never into a busy one.
 pub fn nudge<R: Runtime>(app: &AppHandle<R>, to: AgentSession) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -364,20 +372,23 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>, to: AgentSession) {
                     "{n} new message{}, call mcp__ceo__inbox",
                     if n == 1 { "" } else { "s" }
                 );
-                let typed = s.tmux().and_then(|t| {
-                    t.type_text(&row.tmux_name, &text)?;
-                    std::thread::sleep(Duration::from_millis(150));
-                    t.key(&row.tmux_name, "Enter")
-                });
-                match typed {
-                    Ok(()) => {
-                        for m in &list {
-                            if let Ok(Some(w)) = store.mark_waiting(&m.id, "typed") {
-                                emit(&app, &w);
-                            }
+                let Ok(tmux) = s.tmux() else { break };
+                // A draft of the owner's, a dialog or a picker would take our Enter; their next prompt brings the messages.
+                if !hooks::prompt_empty(&tmux.capture_styled(&row.tmux_name)) {
+                    break;
+                }
+                let typed = tmux.type_text(&row.tmux_name, &text).and_then(|()| {
+                    // Delivered before Enter, so the pointer's own UserPromptSubmit hands nothing over twice.
+                    for m in &list {
+                        if let Ok(Some(w)) = store.mark_waiting(&m.id, "typed") {
+                            emit(&app, &w);
                         }
                     }
-                    Err(e) => println!("bus: could not type into {}: {e}", row.tmux_name),
+                    std::thread::sleep(Duration::from_millis(150));
+                    tmux.key(&row.tmux_name, "Enter")
+                });
+                if let Err(e) = typed {
+                    println!("bus: could not type into {}: {e}", row.tmux_name);
                 }
                 break;
             }
@@ -544,6 +555,13 @@ pub fn retire<R: Runtime>(app: &AppHandle<R>, exec: AgentSession, wait: bool, wh
         }
         if let Err(e) = app.state::<Sessions>().remove(&store, &exec) {
             println!("bus: {e}");
+        }
+        // Nobody can accept them now; closed, they leave the board and the CEO's inbox.
+        for m in store
+            .close_messages(&exec.project_id, &exec.node_id)
+            .unwrap_or_default()
+        {
+            emit(&app, &m);
         }
         let changes = BoardChanges {
             delete_node_ids: vec![exec.node_id.clone()],

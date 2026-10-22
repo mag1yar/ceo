@@ -1,5 +1,6 @@
 // Contract for the agent bus (#19): the Rust side emits the Tauri event `bus://message`
-// with the whole Message as its payload on every state change (sent -> waiting -> accepted).
+// with the whole Message as its payload on every state change (sent -> waiting -> accepted),
+// and once more with `closedAt` set when its executor is retired before it was accepted.
 // `from` and `to` are agent node ids on the project's board; times are ms since the epoch.
 // `message_list` returns what is still on the board after an app restart.
 import { invoke } from "@tauri-apps/api/core"
@@ -22,8 +23,15 @@ export type Message = {
   sentAt: number
   waitingAt?: number
   acceptedAt?: number
+  // Closed unaccepted: the other end is gone, so the board drops it.
+  closedAt?: number
   body?: string
-  deliveredVia?: "typed" | "post_tool_use" | "stop" | null
+  deliveredVia?:
+    | "typed"
+    | "post_tool_use"
+    | "stop"
+    | "user_prompt_submit"
+    | null
 }
 
 // `live` is what the board draws; `asking` holds senders still waiting for a reply to an ask.
@@ -78,6 +86,12 @@ const isMessage = (m: Partial<Message>): m is Message =>
 export function receive(m: Partial<Message>) {
   if (!isMessage(m)) return console.warn("bus: bad message", m)
   const p = project(m.projectId)
+  if (m.closedAt) {
+    p.done.add(m.id)
+    p.live.delete(m.id)
+    p.asks.delete(m.id)
+    return publish(p)
+  }
   const old = p.live.get(m.id)
   if (p.done.has(m.id) || (old && RANK[old.state] >= RANK[m.state])) return
   p.live.set(m.id, m)

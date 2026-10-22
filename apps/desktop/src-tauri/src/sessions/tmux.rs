@@ -2,6 +2,14 @@
 
 use std::process::{Command, Output};
 
+/// tmux ends a command at an argument ending in `;` and drops the `;`; a trailing `\;` stays a literal `;`.
+fn literal(arg: &str) -> String {
+    match arg.strip_suffix(';') {
+        Some(head) => format!("{head}\\;"),
+        None => arg.into(),
+    }
+}
+
 pub struct Tmux {
     pub bin: String,
     pub socket: String,
@@ -47,6 +55,12 @@ impl Tmux {
             .unwrap_or_default()
     }
 
+    /// With colours and attributes as escape sequences, so dim placeholder text tells from typed text.
+    pub fn capture_styled(&self, name: &str) -> String {
+        self.ok(&["capture-pane", "-e", "-p", "-t", &format!("={name}:")])
+            .unwrap_or_default()
+    }
+
     /// Literal text into the pane, as if typed; no key names are interpreted.
     pub fn type_text(&self, name: &str, text: &str) -> Result<(), String> {
         self.ok(&["send-keys", "-t", &format!("={name}:"), "-l", text])
@@ -70,7 +84,12 @@ impl Tmux {
     ) -> Result<(), String> {
         let (cols, rows) = (size.0.to_string(), size.1.to_string());
         let target = format!("={name}:");
-        let env: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let env: Vec<String> = env
+            .iter()
+            .map(|(k, v)| literal(&format!("{k}={v}")))
+            .collect();
+        let cwd = literal(cwd);
+        let cmd: Vec<String> = cmd.iter().map(|a| literal(a)).collect();
         let mut args = vec![
             "new-session",
             "-d",
@@ -81,12 +100,12 @@ impl Tmux {
             "-y",
             &rows,
             "-c",
-            cwd,
+            &cwd,
         ];
         for e in &env {
             args.extend(["-e", e]);
         }
-        args.extend(cmd);
+        args.extend(cmd.iter().map(String::as_str));
         args.extend([";", "set-option", "-t", &target, "detach-on-destroy", "on"]);
         args.extend([";", "set-option", "-t", &target, "status", "off"]);
         self.ok(&args).map(drop)

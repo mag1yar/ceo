@@ -67,12 +67,15 @@ CREATE TABLE messages (
     kind TEXT NOT NULL,
     body TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('sent', 'waiting', 'accepted')),
-    delivered_via TEXT CHECK (delivered_via IN ('typed', 'post_tool_use', 'stop')),
+    delivered_via TEXT CHECK (delivered_via IN ('typed', 'post_tool_use', 'stop', 'user_prompt_submit')),
     sent_at INTEGER NOT NULL,
     waiting_at INTEGER,
     accepted_at INTEGER
 );
 CREATE INDEX messages_to ON messages (project_id, to_node, state);
+",
+    "
+ALTER TABLE messages ADD COLUMN closed_at INTEGER;
 ",
 ];
 

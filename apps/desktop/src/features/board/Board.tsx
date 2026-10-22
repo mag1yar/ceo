@@ -46,7 +46,7 @@ import {
 import { BoardToolbar } from "./BoardToolbar"
 import { edgeTypes } from "./edgeTypes"
 import { LinkConnectionLine } from "./LinkEdge"
-import { newLink, sameEdge, toBoardEdge, toEdge } from "./link"
+import { newLink, sameEdge, toBoardEdge, toEdge, toNode } from "./link"
 import { nodeTypes } from "./nodeTypes"
 import { newNote } from "./note"
 
@@ -417,18 +417,6 @@ function ZoomControls() {
       </Button>
     </Panel>
   )
-}
-
-function toNode(n: BoardNode): Node {
-  return {
-    id: n.id,
-    type: n.type,
-    position: { x: n.x, y: n.y },
-    data: (n.data ?? {}) as Record<string, unknown>,
-    zIndex: n.z,
-    ...(n.width != null && { width: n.width }),
-    ...(n.height != null && { height: n.height }),
-  }
 }
 
 function toBoard(n: Node): BoardNode {

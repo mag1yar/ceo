@@ -89,7 +89,7 @@ fn check(words: &[String]) -> Option<String> {
         match w.as_str() {
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
             | "--config-env" => {
-                if w == "-c" && words.get(i + 1).is_some_and(|v| v.starts_with("alias.")) {
+                if w == "-c" && words.get(i + 1).is_some_and(|v| is_alias(v)) {
                     return Some("git aliases set on the command line are not allowed".into());
                 }
                 i += 2;
@@ -125,6 +125,15 @@ fn check(words: &[String]) -> Option<String> {
             "git worktree remove --force is not allowed"
         }
         "clean" => "git clean is not allowed: it deletes untracked work",
+        // An alias set first and called later hides its subcommand from this check.
+        "config"
+            if args.iter().any(|a| is_alias(a))
+                && !args.iter().any(|a| {
+                    a.starts_with("--get") || ["-l", "--list", "get", "list"].contains(&a.as_str())
+                }) =>
+        {
+            "setting a git alias is not allowed"
+        }
         _ => return None,
     };
     Some(why.into())
@@ -132,6 +141,12 @@ fn check(words: &[String]) -> Option<String> {
 
 fn base(word: &str) -> &str {
     word.rsplit('/').next().unwrap_or(word)
+}
+
+// Config keys are case-insensitive: `Alias.p` defines an alias too.
+fn is_alias(key: &str) -> bool {
+    key.get(..6)
+        .is_some_and(|k| k.eq_ignore_ascii_case("alias."))
 }
 
 fn is_assignment(w: &str) -> bool {

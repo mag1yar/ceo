@@ -184,7 +184,7 @@ describe("bus: the CEO spawns an executor that reports back", function () {
       "waiting",
       "accepted",
     ])
-    // Every message got all three states, each through one delivery path.
+    // Every message got all three states, each through one delivery path; the CEO's note reaches the booting executor with its brief.
     for (const m of last.values()) {
       expect(log.filter((x) => x.id === m.id).map((x) => x.state)).toEqual([
         "sent",
@@ -198,7 +198,7 @@ describe("bus: the CEO spawns an executor that reports back", function () {
       "ask typed",
       "reply post_tool_use",
       "report stop",
-      "send post_tool_use",
+      "send user_prompt_submit",
     ])
     // Latencies for the #19 comment, ms from the bus's own timestamps.
     for (const m of last.values())

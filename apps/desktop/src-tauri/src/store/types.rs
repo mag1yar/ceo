@@ -103,4 +103,7 @@ pub struct Message {
     pub waiting_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accepted_at: Option<i64>,
+    /// Set when its executor is retired unaccepted; the board drops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
 }

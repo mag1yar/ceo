@@ -77,6 +77,18 @@ describe("receive", () => {
     expect(messagesOf(p).asking).toEqual([])
   })
 
+  it("drops a closed message and its ask at once", () => {
+    const p = "p4"
+    receive(msg({ projectId: p, kind: "ask", state: "waiting" }))
+    receive(msg({ id: "m2", projectId: p }))
+    expect(messagesOf(p).asking).toEqual(["a"])
+    receive(msg({ projectId: p, kind: "ask", state: "waiting", closedAt: 2 }))
+    expect(messagesOf(p).live.map((m) => m.id)).toEqual(["m2"])
+    expect(messagesOf(p).asking).toEqual([])
+    receive(msg({ projectId: p, kind: "ask", state: "waiting" }))
+    expect(messagesOf(p).live.map((m) => m.id)).toEqual(["m2"])
+  })
+
   it("ignores malformed payloads", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     receive({ ...msg({ projectId: "p3" }), kind: "shout" as "send" })

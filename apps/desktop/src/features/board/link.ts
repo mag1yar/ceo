@@ -2,10 +2,11 @@ import {
   type Connection,
   type Edge,
   type InternalNode,
+  type Node,
   Position,
   type XYPosition,
 } from "@xyflow/react"
-import type { BoardEdge } from "@/lib/store"
+import type { BoardEdge, BoardNode } from "@/lib/store"
 
 // `kind` tells plain links from later edge kinds; old links may still carry handle ids, which nothing reads now that ends float.
 export type LinkData = {
@@ -35,6 +36,18 @@ export function toEdge(e: BoardEdge): Edge {
     target: e.target,
     // Ends float, so stored handle ids (old `in`/`out` too) stay in data and React Flow takes any handle.
     data,
+  }
+}
+
+export function toNode(n: BoardNode): Node {
+  return {
+    id: n.id,
+    type: n.type,
+    position: { x: n.x, y: n.y },
+    data: (n.data ?? {}) as Record<string, unknown>,
+    zIndex: n.z,
+    ...(n.width != null && { width: n.width }),
+    ...(n.height != null && { height: n.height }),
   }
 }
 

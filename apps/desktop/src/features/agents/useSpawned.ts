@@ -7,7 +7,7 @@ import {
   useEffect,
   useRef,
 } from "react"
-import { toEdge } from "@/features/board/link"
+import { toEdge, toNode } from "@/features/board/link"
 import type { BoardChanges, BoardEdge, BoardNode } from "@/lib/store"
 
 // Rust emits this when the bus adds or removes board items: a spawned executor and its link to the CEO.
@@ -18,14 +18,6 @@ type Saved = RefObject<{
   nodes: Map<string, BoardNode>
   edges: Map<string, BoardEdge>
 }>
-
-const toNode = (n: BoardNode): Node => ({
-  id: n.id,
-  type: n.type,
-  position: { x: n.x, y: n.y },
-  data: n.data as Record<string, unknown>,
-  zIndex: n.z,
-})
 
 const ownedNode = (n: BoardNode) => n.type === "executor"
 const ownedEdge = (e: BoardEdge) =>

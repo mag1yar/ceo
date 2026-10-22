@@ -29,6 +29,7 @@ import {
 } from "react"
 import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
 import { useIsValidConnection } from "@/features/agents/canConnect"
+import { newDiagram } from "@/features/diagrams/diagram"
 import {
   type BoardChanges,
   type Board as BoardData,
@@ -242,6 +243,16 @@ function Canvas({
     const [x, y, zoom] = transform
     addNote({ x: (width / 2 - x) / zoom, y: (height / 2 - y) / zoom })
   }, [addNote, flow])
+  const addDiagram = useCallback(() => {
+    const { width, height, transform } = flow.getState()
+    const [x, y, zoom] = transform
+    const diagram = newDiagram({
+      x: (width / 2 - x) / zoom,
+      y: (height / 2 - y) / zoom,
+    })
+    record()
+    setNodes((ns) => [...ns, diagram])
+  }, [flow, record])
   const onDoubleClick = useCallback(
     (e: MouseEvent) => {
       if ((e.target as Element).classList.contains("react-flow__pane"))
@@ -311,7 +322,7 @@ function Canvas({
     >
       <DotGrid />
       <ZoomControls />
-      <BoardToolbar onAddNote={addNoteAtCenter} />
+      <BoardToolbar onAddNote={addNoteAtCenter} onAddDiagram={addDiagram} />
       <AgentInspector />
       {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
     </ReactFlow>

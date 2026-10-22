@@ -30,7 +30,7 @@ fn migrates_from_zero_and_is_idempotent() {
     let v: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 1);
+    assert_eq!(v, 2);
     let mut tables: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .unwrap()
@@ -39,7 +39,16 @@ fn migrates_from_zero_and_is_idempotent() {
         .map(Result::unwrap)
         .collect();
     tables.sort();
-    assert_eq!(tables, ["board_edges", "board_nodes", "boards", "projects"]);
+    assert_eq!(
+        tables,
+        [
+            "board_edges",
+            "board_nodes",
+            "boards",
+            "projects",
+            "sessions"
+        ]
+    );
     drop(conn);
     Store::open(&path).unwrap();
 }
@@ -164,6 +173,7 @@ fn ts_types_match_rust() {
         BoardEdge::export_to_string(&cfg),
         Board::export_to_string(&cfg),
         BoardChanges::export_to_string(&cfg),
+        AgentSession::export_to_string(&cfg),
     ]
     .map(|r| r.unwrap())
     .join("\n")

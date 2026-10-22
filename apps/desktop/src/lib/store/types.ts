@@ -10,3 +10,11 @@ export type BoardEdge = { id: string, source: string, target: string, data: unkn
 export type Board = { viewport: unknown, nodes: Array<BoardNode>, edges: Array<BoardEdge>, };
 
 export type BoardChanges = { viewport: unknown | null, upsertNodes: Array<BoardNode>, deleteNodeIds: Array<string>, upsertEdges: Array<BoardEdge>, deleteEdgeIds: Array<string>, };
+
+/**
+
+ * One `claude` in tmux behind an agent node; `worktree` and `branch` are absent for a non-git project.
+
+ */
+
+export type AgentSession = { id: string, projectId: string, nodeId: string, role: string, repo: string, worktree: string | null, branch: string | null, tmuxName: string, claudeSessionId: string, status: string, action: string, };

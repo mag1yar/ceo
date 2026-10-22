@@ -62,3 +62,23 @@ pub struct BoardChanges {
     pub upsert_edges: Vec<BoardEdge>,
     pub delete_edge_ids: Vec<String>,
 }
+
+/// One `claude` in tmux behind an agent node; `worktree` and `branch` are absent for a non-git project.
+#[derive(Serialize, Deserialize, TS, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSession {
+    pub id: String,
+    pub project_id: String,
+    pub node_id: String,
+    pub role: String,
+    pub repo: String,
+    pub worktree: Option<String>,
+    pub branch: Option<String>,
+    pub tmux_name: String,
+    pub claude_session_id: String,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub token: String,
+    pub status: String,
+    pub action: String,
+}

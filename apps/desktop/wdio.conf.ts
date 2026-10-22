@@ -1,7 +1,8 @@
 /// <reference types="@wdio/globals/types" />
+import { execSync, spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { worktreePort } from "./e2e/port"
 
 // Throwaway HOME per run puts app_data_dir (ceo.db) there; WebKit storage is in memory via `incognito`.
@@ -10,6 +11,17 @@ const home = process.env.WDIO_WORKER_ID
   ? (process.env.CEO_E2E_HOME ?? "")
   : mkdtempSync(join(tmpdir(), "ceo-e2e-"))
 process.env.CEO_E2E_HOME = home
+// Agent sessions: a stub instead of claude, on a tmux socket of this run only (sockets live outside HOME).
+process.env.CEO_E2E_TMUX ??= `ceo-e2e-${process.pid}`
+process.env.CEO_TMUX_BIN ??= execSync("command -v tmux || echo tmux")
+  .toString()
+  .trim()
+process.env.CEO_CLAUDE_BIN = resolve("e2e/app/stub-claude.mjs")
+const sessionEnv = {
+  CEO_E2E_TMUX: process.env.CEO_E2E_TMUX,
+  CEO_TMUX_BIN: process.env.CEO_TMUX_BIN,
+  CEO_CLAUDE_BIN: process.env.CEO_CLAUDE_BIN,
+}
 const port = Number(process.env.TAURI_WEBDRIVER_PORT) || worktreePort(4445)
 
 export const config: WebdriverIO.Config = {
@@ -29,7 +41,7 @@ export const config: WebdriverIO.Config = {
       {
         driverProvider: "embedded",
         embeddedPort: port,
-        env: { HOME: process.env.CEO_E2E_HOME },
+        env: { HOME: process.env.CEO_E2E_HOME, ...sessionEnv },
         captureBackendLogs: true,
       },
     ],
@@ -37,7 +49,15 @@ export const config: WebdriverIO.Config = {
   // An explicit switch stops the service probing window focus through tauri-plugin-wdio, which we do not ship.
   before: async (_caps, _specs, browser) =>
     browser.switchToWindow(await browser.getWindowHandle()),
-  onComplete: () => rmSync(home, { recursive: true, force: true }),
+  onComplete: () => {
+    // Only this run's server: never the default socket or the app's `ceo` one.
+    const name = process.env.CEO_E2E_TMUX ?? ""
+    spawnSync(process.env.CEO_TMUX_BIN ?? "tmux", ["-L", name, "kill-server"])
+    // tmux 3.6 leaves the socket file behind once its server is gone.
+    const dir = process.env.TMUX_TMPDIR ?? "/tmp"
+    rmSync(join(dir, `tmux-${process.getuid?.()}`, name), { force: true })
+    rmSync(home, { recursive: true, force: true })
+  },
   framework: "mocha",
   mochaOpts: {
     rootHooks: {

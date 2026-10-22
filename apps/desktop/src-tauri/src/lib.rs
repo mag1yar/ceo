@@ -1,6 +1,7 @@
 #[cfg(feature = "e2e")]
 mod e2e;
 mod git;
+mod sessions;
 mod store;
 mod terminal;
 
@@ -25,7 +26,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(feature = "e2e")]
             e2e::setup(app);
-            store::init(app)
+            store::init(app)?;
+            sessions::init(app)
         })
         .invoke_handler(tauri::generate_handler![
             store::project_list,
@@ -41,6 +43,9 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_close,
+            sessions::session_ensure,
+            sessions::session_delete,
+            sessions::session_list,
             #[cfg(feature = "e2e")]
             e2e::e2e_menu,
             #[cfg(feature = "e2e")]

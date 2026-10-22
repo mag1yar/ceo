@@ -152,6 +152,17 @@ function handle(cmd: string, payload: unknown) {
       if (cmd === "terminal_write") emit(t, a.data.replaceAll("\r", "\r\n"))
       return null
     }
+    // No claude here: every agent node keeps the fake shell and the mock status pool.
+    case "session_ensure":
+    case "session_delete":
+      return null
+    case "session_list":
+      return []
+    // status.ts listens for session status; the mock never emits any.
+    case "plugin:event|listen":
+      return 0
+    case "plugin:event|unlisten":
+      return null
     default:
       throw `mock-ipc: no handler for ${cmd}`
   }

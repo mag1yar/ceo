@@ -23,6 +23,8 @@ type Hook = { e2e: { terminals: Record<string, Term> } }
 
 const team = buildTeam()
 const ceo = team.nodes.find((n) => n.type === "ceo") as BoardNode
+// The CEO runs claude (sessions.ts); a Lead keeps the login shell.
+const shell = team.nodes.find((n) => n.type === "lead") as BoardNode
 const member = team.nodes.find((n) => n.type === "member") as BoardNode
 const agents =
   ".react-flow__node-ceo, .react-flow__node-lead, .react-flow__node-member"
@@ -150,16 +152,16 @@ describe("agent terminals in the hidden app", function () {
   it("runs a login shell per agent: pwd, read-only overview, focus, top, tput cols", async () => {
     mkdirSync("test-results-app", { recursive: true })
     // The shell's prompt arrived.
-    await browser.waitUntil(async () => (await screen(ceo.id)).trim() !== "")
+    await browser.waitUntil(async () => (await screen(shell.id)).trim() !== "")
     // Overview drops input.
-    await type(ceo.id, "echo overview-typed\r")
+    await type(shell.id, "echo overview-typed\r")
     await browser.pause(500)
-    expect(await screen(ceo.id)).not.toContain("overview-typed")
+    expect(await screen(shell.id)).not.toContain("overview-typed")
     await browser.saveScreenshot(
       `test-results-app/terminal-overview-${await scheme()}.png`
     )
 
-    await node(ceo.id).$("button[aria-label='Focus terminal']").click()
+    await node(shell.id).$("button[aria-label='Focus terminal']").click()
     await browser.waitUntil(
       async () =>
         (
@@ -171,36 +173,38 @@ describe("agent terminals in the hidden app", function () {
         )?.includes("scale(1)") ?? false,
       { timeoutMsg: "focus did not zoom to 100%" }
     )
-    await type(ceo.id, "pwd\r")
-    await waitFor(ceo.id, dir)
-    await type(ceo.id, "ls\r")
-    await waitFor(ceo.id, "known-file.txt")
+    await type(shell.id, "pwd\r")
+    await waitFor(shell.id, dir)
+    await type(shell.id, "ls\r")
+    await waitFor(shell.id, "known-file.txt")
 
     // The PTY took the focused size.
     const cols = await browser.execute(
       (id) => (window as unknown as Hook).e2e.terminals[id].cols,
-      ceo.id
+      shell.id
     )
     expect(cols).toBeGreaterThan(100)
-    await type(ceo.id, "clear; tput cols\r")
+    await type(shell.id, "clear; tput cols\r")
     await browser.waitUntil(async () =>
-      (await screen(ceo.id)).split("\n").includes(String(cols))
+      (await screen(shell.id)).split("\n").includes(String(cols))
     )
 
     // top redraws in place: the header is there and the screen changes between two reads.
-    await type(ceo.id, "top -s 1\r")
-    await waitFor(ceo.id, "PID")
-    const first = await screen(ceo.id)
-    await browser.waitUntil(async () => (await screen(ceo.id)) !== first, {
+    await type(shell.id, "top -s 1\r")
+    await waitFor(shell.id, "PID")
+    const first = await screen(shell.id)
+    await browser.waitUntil(async () => (await screen(shell.id)) !== first, {
       timeout: 5000,
       timeoutMsg: "top did not redraw",
     })
     await browser.saveScreenshot(
       `test-results-app/terminal-focus-top-${await scheme()}.png`
     )
-    await type(ceo.id, "q")
-    await browser.waitUntil(async () => !(await screen(ceo.id)).includes("PID"))
-    await node(ceo.id).$("button[aria-label='Exit focus']").click()
+    await type(shell.id, "q")
+    await browser.waitUntil(
+      async () => !(await screen(shell.id)).includes("PID")
+    )
+    await node(shell.id).$("button[aria-label='Exit focus']").click()
   })
 
   it("deleting an agent node kills its shell", async () => {

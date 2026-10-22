@@ -1,4 +1,4 @@
-//! Login shells on PTYs, streamed to the webview as raw bytes over a `Channel`.
+//! Login shells and tmux clients on PTYs, streamed to the webview as raw bytes over a `Channel`.
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
@@ -6,8 +6,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
-use tauri::State;
 use tauri::ipc::{Channel, InvokeResponseBody};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 type Res<T> = Result<T, String>;
 
@@ -21,6 +21,8 @@ struct Session {
 pub struct Terminals {
     shell: String,
     next: AtomicU32,
+    // Bumped by close_all: a PTY asked for by a page that has since reloaded is not kept.
+    page: AtomicU32,
     sessions: Mutex<HashMap<u32, Session>>,
 }
 
@@ -29,6 +31,7 @@ impl Terminals {
         Self {
             shell,
             next: AtomicU32::new(1),
+            page: AtomicU32::new(0),
             sessions: Mutex::default(),
         }
     }
@@ -44,7 +47,11 @@ impl Terminals {
     }
 
     pub fn close_all(&self) {
-        let all: Vec<_> = self.sessions().drain().map(|(_, s)| s).collect();
+        let all: Vec<_> = {
+            let mut sessions = self.sessions();
+            self.page.fetch_add(1, Ordering::Relaxed);
+            sessions.drain().map(|(_, s)| s).collect()
+        };
         all.into_iter().for_each(kill);
     }
 }
@@ -92,19 +99,38 @@ fn pump(mut reader: Box<dyn Read + Send>, out: Channel<InvokeResponseBody>) {
     });
 }
 
+/// A login shell in `cwd`, or with `tmux` set, a client attached to that agent session (the session outlives the PTY).
 #[tauri::command(async)]
-pub fn terminal_open(
+pub fn terminal_open<R: Runtime>(
+    app: AppHandle<R>,
     t: State<Terminals>,
     cwd: String,
     cols: u16,
     rows: u16,
+    tmux: Option<String>,
     on_output: Channel<InvokeResponseBody>,
 ) -> Res<u32> {
+    let page = t.page.load(Ordering::Relaxed);
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
-    let mut cmd = CommandBuilder::new(&t.shell);
-    cmd.arg("-l");
+    let mut cmd = match &tmux {
+        Some(name) => {
+            let sessions = app
+                .try_state::<crate::sessions::Sessions>()
+                .ok_or("agent sessions are not running")?;
+            let argv = sessions.attach_argv(name)?;
+            let mut cmd = CommandBuilder::from_argv(argv.into_iter().map(Into::into).collect());
+            // An app started from inside tmux would otherwise refuse to nest the client.
+            cmd.env_remove("TMUX");
+            cmd
+        }
+        None => {
+            let mut cmd = CommandBuilder::new(&t.shell);
+            cmd.arg("-l");
+            cmd
+        }
+    };
     // The shell keeps PWD as given (symlinks unresolved) when it names the same folder as cwd.
     cmd.env("PWD", &cwd);
     cmd.cwd(cwd);
@@ -120,14 +146,18 @@ pub fn terminal_open(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     pump(reader, on_output);
     let id = t.next.fetch_add(1, Ordering::Relaxed);
-    t.sessions().insert(
-        id,
-        Session {
-            master: pair.master,
-            writer: Arc::new(Mutex::new(writer)),
-            child,
-        },
-    );
+    let session = Session {
+        master: pair.master,
+        writer: Arc::new(Mutex::new(writer)),
+        child,
+    };
+    let mut sessions = t.sessions();
+    if t.page.load(Ordering::Relaxed) != page {
+        drop(sessions);
+        kill(session);
+        return Err("the page reloaded".into());
+    }
+    sessions.insert(id, session);
     Ok(id)
 }
 

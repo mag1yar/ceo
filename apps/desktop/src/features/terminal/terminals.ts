@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core"
 import { FitAddon } from "@xterm/addon-fit"
 import { type ITheme, Terminal } from "@xterm/xterm"
 import { useCallback, useSyncExternalStore } from "react"
+import type { AgentSession } from "@/lib/store"
 
 export type Session = {
   projectId: string
@@ -67,15 +68,24 @@ function open(id: string, projectId: string, cwd: string): Session {
     if (bytes.byteLength) term.write(new Uint8Array(bytes))
     else term.write("\r\n\x1b[2m[process exited]\x1b[0m")
   })
-  let queue: Promise<number | undefined> = invoke<number>("terminal_open", {
-    cwd,
-    cols: term.cols,
-    rows: term.rows,
-    onOutput: output,
-  }).catch((e) => {
-    term.write(`\x1b[31m${e}\x1b[0m\r\n`)
-    return undefined
-  })
+  // A CEO node attaches to its claude session in tmux; other nodes get a login shell.
+  let queue: Promise<number | undefined> = invoke<AgentSession | null>(
+    "session_ensure",
+    { projectId, nodeId: id, cols: term.cols, rows: term.rows }
+  )
+    .then((session) =>
+      invoke<number>("terminal_open", {
+        cwd,
+        cols: term.cols,
+        rows: term.rows,
+        tmux: session?.tmuxName ?? null,
+        onOutput: output,
+      })
+    )
+    .catch((e) => {
+      term.write(`\x1b[31m${e}\x1b[0m\r\n`)
+      return undefined
+    })
   // One chain keeps writes and resizes in order: async commands may otherwise overtake each other.
   const send = (cmd: string, args: object) => {
     queue = queue.then(async (pty) => {
@@ -111,6 +121,14 @@ function open(id: string, projectId: string, cwd: string): Session {
     close: () => {
       live = false
       send("terminal_close", {})
+      // The node is gone, so its session, worktree and branch go too (git keeps unsaved work).
+      // Also when session_ensure failed half way: Rust ignores nodes without a session.
+      queue = queue.then(async (pty) => {
+        await invoke("session_delete", { projectId, nodeId: id }).catch(
+          console.error
+        )
+        return pty
+      })
       term.dispose()
       delete (window as Hook).e2e?.terminals?.[id]
     },

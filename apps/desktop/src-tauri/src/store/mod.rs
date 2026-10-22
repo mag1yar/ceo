@@ -227,6 +227,109 @@ impl Store {
     }
 }
 
+impl Store {
+    pub fn node_role(&self, project_id: &str, node_id: &str) -> Res<Option<String>> {
+        self.conn()?
+            .query_row(
+                "SELECT type FROM board_nodes WHERE project_id = ?1 AND id = ?2",
+                [project_id, node_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)
+    }
+
+    fn query_sessions(&self, filter: &str, args: &[&str]) -> Res<Vec<AgentSession>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(&format!("SELECT {SESSION_COLS} FROM sessions WHERE removed_at IS NULL AND {filter} ORDER BY created_at"))
+            .map_err(err)?;
+        stmt.query_map(rusqlite::params_from_iter(args), session_row)
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)
+    }
+
+    pub fn session(&self, id: &str) -> Res<Option<AgentSession>> {
+        Ok(self.query_sessions("id = ?1", &[id])?.pop())
+    }
+
+    pub fn node_session(&self, project_id: &str, node_id: &str) -> Res<Option<AgentSession>> {
+        Ok(self
+            .query_sessions("project_id = ?1 AND node_id = ?2", &[project_id, node_id])?
+            .pop())
+    }
+
+    pub fn project_sessions(&self, project_id: &str) -> Res<Vec<AgentSession>> {
+        self.query_sessions("project_id = ?1", &[project_id])
+    }
+
+    // Sessions of deleted projects are left out: nothing may restart them.
+    pub fn live_sessions(&self) -> Res<Vec<AgentSession>> {
+        self.query_sessions("project_id IN (SELECT id FROM projects)", &[])
+    }
+
+    pub fn insert_session(&self, s: &AgentSession) -> Res<()> {
+        self.conn()?
+            .execute(
+                &format!(
+                    "INSERT INTO sessions (id, project_id, node_id, role, repo, worktree, branch, tmux_name,
+                       claude_session_id, token, status, action, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, {NOW_MS}, {NOW_MS})"
+                ),
+                params![
+                    s.id, s.project_id, s.node_id, s.role, s.repo, s.worktree, s.branch, s.tmux_name,
+                    s.claude_session_id, s.token, s.status, s.action
+                ],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+
+    pub fn set_session_status(&self, id: &str, status: &str, action: &str) -> Res<()> {
+        self.conn()?
+            .execute(
+                &format!("UPDATE sessions SET status = ?2, action = ?3, updated_at = {NOW_MS} WHERE id = ?1"),
+                params![id, status, action],
+            )
+            .map_err(err)?;
+        Ok(())
+    }
+
+    /// Deletes the row, or keeps it as removed with the reason when git refused to delete the work.
+    pub fn remove_session(&self, id: &str, kept: Option<&str>) -> Res<()> {
+        let conn = self.conn()?;
+        match kept {
+            None => conn.execute("DELETE FROM sessions WHERE id = ?1", [id]),
+            Some(why) => conn.execute(
+                &format!("UPDATE sessions SET removed_at = {NOW_MS}, status = 'done', action = ?2 WHERE id = ?1"),
+                params![id, why],
+            ),
+        }
+        .map_err(err)?;
+        Ok(())
+    }
+}
+
+const SESSION_COLS: &str = "id, project_id, node_id, role, repo, worktree, branch, tmux_name, claude_session_id, token, status, action";
+
+fn session_row(r: &rusqlite::Row) -> rusqlite::Result<AgentSession> {
+    Ok(AgentSession {
+        id: r.get(0)?,
+        project_id: r.get(1)?,
+        node_id: r.get(2)?,
+        role: r.get(3)?,
+        repo: r.get(4)?,
+        worktree: r.get(5)?,
+        branch: r.get(6)?,
+        tmux_name: r.get(7)?,
+        claude_session_id: r.get(8)?,
+        token: r.get(9)?,
+        status: r.get(10)?,
+        action: r.get(11)?,
+    })
+}
+
 fn project_row(r: &rusqlite::Row) -> rusqlite::Result<Project> {
     Ok(Project {
         id: r.get(0)?,
@@ -270,7 +373,12 @@ pub fn project_touch(s: State<Store>, id: String) -> Res<Project> {
     s.touch_project(&id)
 }
 #[tauri::command(async)]
-pub fn project_delete(s: State<Store>, id: String) -> Res<()> {
+pub fn project_delete<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    s: State<Store>,
+    id: String,
+) -> Res<()> {
+    crate::sessions::remove_project(&app, &id);
     s.delete_project(&id)
 }
 #[tauri::command(async)]

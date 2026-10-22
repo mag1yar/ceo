@@ -1,7 +1,8 @@
 use rusqlite::Connection;
 
 // Append only: the index + 1 of an entry is its schema version (PRAGMA user_version).
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -34,7 +35,28 @@ CREATE TABLE board_edges (
     data TEXT NOT NULL,
     PRIMARY KEY (project_id, id)
 );
-"];
+",
+    "
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    worktree TEXT,
+    branch TEXT,
+    tmux_name TEXT NOT NULL,
+    claude_session_id TEXT NOT NULL,
+    token TEXT NOT NULL,
+    status TEXT NOT NULL,
+    action TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    removed_at INTEGER
+);
+CREATE UNIQUE INDEX sessions_node ON sessions (project_id, node_id) WHERE removed_at IS NULL;
+",
+];
 
 pub fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;

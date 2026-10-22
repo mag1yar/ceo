@@ -16,10 +16,9 @@ import {
 } from "@phosphor-icons/react"
 import { useEffect, useSyncExternalStore } from "react"
 
-// Letters and digits match the physical key (`code`), so shortcuts work on non-Latin layouts; `key` is for a character like "?".
+// Shortcuts match the physical key (`code`), so they work on non-Latin layouts.
 export type Shortcut = {
-  code?: string
-  key?: string
+  code: string
   meta?: boolean
   shift?: boolean
 }
@@ -143,7 +142,7 @@ export const COMMANDS: Command[] = [
     title: "Keyboard shortcuts",
     group: "Help",
     icon: KeyboardIcon,
-    shortcuts: [cmd("Slash"), { key: "?" }],
+    shortcuts: [cmd("Slash")],
   },
 ]
 
@@ -151,8 +150,6 @@ export const GROUPS = ["Project", "View", "Board", "Help"] as const
 
 export function matches(s: Shortcut, e: KeyboardEvent) {
   if (e.ctrlKey || e.altKey || !!s.meta !== e.metaKey) return false
-  // A character already carries its Shift.
-  if (s.key) return e.key === s.key
   return e.code === s.code && !!s.shift === e.shiftKey
 }
 
@@ -165,14 +162,13 @@ const KEY_LABELS: Record<string, string> = {
 
 /** Keycaps for a shortcut, for example ["⌘", "⇧", "]"]. */
 export function keys(s: Shortcut) {
-  const key =
-    s.key ?? KEY_LABELS[s.code ?? ""] ?? s.code?.replace(/^(Key|Digit)/, "")
+  const key = KEY_LABELS[s.code] ?? s.code.replace(/^(Key|Digit)/, "")
   return [s.meta && "⌘", s.shift && "⇧", key].filter(Boolean) as string[]
 }
 
 /** Tauri accelerator, only for Cmd shortcuts: a bare key in the menu would fire while typing. */
 export function accelerator(s: Shortcut | undefined) {
-  if (!s?.meta || !s.code) return undefined
+  if (!s?.meta) return undefined
   return ["Cmd", s.shift && "Shift", s.code].filter(Boolean).join("+")
 }
 

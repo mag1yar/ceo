@@ -102,7 +102,7 @@ The sidebar collapse animates width and the header inset with `--ease-spring` ov
 
 ## Commands and shortcuts
 
-Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`, lists every app command with its id, title, group, icon and shortcuts. The keyboard listener, the Cmd+K palette, the help dialog (`?` or Cmd+/) and the macOS menu bar all read it; components bind run functions with `useCommand(id, run)`, and a command without one is unavailable.
+Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`, lists every app command with its id, title, group, icon and shortcuts. The keyboard listener, the Cmd+K palette, the help dialog (Cmd+/) and the macOS menu bar all read it; components bind run functions with `useCommand(id, run)`, and a command without one is unavailable.
 
 - Shortcuts match the physical key (`code`), so they work on any layout. They do nothing while the keyboard is in an input, a textarea (the note and diagram editors, xterm's helper), a contenteditable, a menu or an open dialog. The focus mode keys from #15 are the exception and work inside the focused terminal.
 - The menu bar is built in JS with `@tauri-apps/api/menu`: the standard App, Edit and Window menus, plus one menu per registry group. Only Cmd shortcuts become accelerators. Undo and Redo stay the native Edit items so text fields keep their own undo.

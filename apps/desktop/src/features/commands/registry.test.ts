@@ -14,9 +14,8 @@ test("every command has a unique id and every shortcut belongs to one command", 
     for (const s of c.shortcuts ?? []) {
       const e = new KeyboardEvent("keydown", {
         code: s.code,
-        key: s.key ?? "",
         metaKey: !!s.meta,
-        shiftKey: !!s.shift || s.key === "?",
+        shiftKey: !!s.shift,
       })
       const hits = COMMANDS.filter((x) =>
         x.shortcuts?.some((y) => matches(y, e))
@@ -49,7 +48,6 @@ test("keycaps and menu accelerators", () => {
     "]",
   ])
   expect(keys({ code: "Digit1", shift: true })).toEqual(["⇧", "1"])
-  expect(keys({ key: "?" })).toEqual(["?"])
   expect(accelerator({ code: "KeyK", meta: true })).toBe("Cmd+KeyK")
   expect(accelerator({ code: "BracketLeft", meta: true, shift: true })).toBe(
     "Cmd+Shift+BracketLeft"

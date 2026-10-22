@@ -149,7 +149,10 @@ test("shortcuts run the same commands; ? and Cmd+/ list the registry", async ({
   await expect(zoom(page)).not.toHaveText("100%")
 
   await page.keyboard.press("Meta+Digit0")
+  // Only Cmd+/ opens help; a bare "?" stays a character.
   await page.keyboard.press("Shift+Slash")
+  await expect(help(page)).toBeHidden()
+  await page.keyboard.press("Meta+Slash")
   await expect(help(page)).toBeVisible()
   for (const c of COMMANDS.filter((c) => c.shortcuts))
     await expect(help(page)).toContainText(c.title)

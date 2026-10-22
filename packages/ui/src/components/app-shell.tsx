@@ -85,7 +85,8 @@ function AppShell({ className, style, ...props }: ComponentProps<"div">) {
       // Cmd only: Ctrl+B is the tmux prefix inside terminals.
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)
         return
-      if (event.key.toLowerCase() !== "b" || event.repeat) return
+      // Physical key, so Cmd+B also works on non-Latin layouts.
+      if (event.code !== "KeyB" || event.repeat) return
       if (event.target instanceof HTMLElement && event.target.isContentEditable)
         return
       event.preventDefault()
@@ -194,6 +195,7 @@ function SidebarResizeHandle() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
       onDoubleClick={() => setWidth(SIDEBAR_WIDTH.default)}
       onKeyDown={onKeyDown}
       className="group/handle relative z-10 -mx-1 w-2 shrink-0 cursor-col-resize outline-none group-data-[sidebar=collapsed]/shell:hidden"
@@ -259,7 +261,7 @@ function Main({ className, ...props }: ComponentProps<"main">) {
     <main
       data-slot="main"
       className={cn(
-        "relative flex min-w-0 flex-1 flex-col border-l border-sidebar-border bg-background",
+        "relative flex min-w-0 flex-1 flex-col border-sidebar-border bg-background group-data-[sidebar=expanded]/shell:border-l",
         className
       )}
       {...props}

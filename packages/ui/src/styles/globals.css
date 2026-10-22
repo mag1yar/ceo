@@ -265,3 +265,53 @@
     background: color-mix(in oklch, var(--primary) 25%, transparent);
   }
 }
+
+/* Agent nodes and statuses (#7). Status colours are the only colour on a node. */
+@theme inline {
+  --color-agent-idle: var(--agent-idle);
+  --color-agent-working: var(--agent-working);
+  --color-agent-waiting: var(--agent-waiting);
+  --color-agent-error: var(--agent-error);
+  --color-agent-done: var(--agent-done);
+}
+
+@theme {
+  /* Slow and small: alive without pulling the eye. */
+  --animate-agent-spin: agent-spin 1.4s linear infinite;
+  /* Two soft rings when an agent starts waiting, then still. */
+  --animate-agent-attention: agent-attention 1.2s var(--ease-out) 2;
+
+  @keyframes agent-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes agent-attention {
+    from {
+      opacity: 0.7;
+      transform: scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: scale(1.08);
+    }
+  }
+}
+
+:root {
+  --agent-idle: oklch(0.52 0 0 / 55%);
+  --agent-working: oklch(0.56 0.19 257);
+  --agent-waiting: oklch(0.7 0.16 65);
+  --agent-error: oklch(0.577 0.215 27);
+  --agent-done: oklch(0.6 0.14 152);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --agent-idle: oklch(0.68 0 0 / 55%);
+    --agent-working: oklch(0.66 0.17 257);
+    --agent-waiting: oklch(0.8 0.15 75);
+    --agent-error: oklch(0.704 0.191 22.216);
+    --agent-done: oklch(0.72 0.15 152);
+  }
+}

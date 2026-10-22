@@ -2,9 +2,11 @@ import "@xyflow/react/dist/base.css"
 import { CornersOutIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react"
 import { Button } from "@workspace/ui/components/button"
 import {
+  applyEdgeChanges,
   applyNodeChanges,
   type Node,
   type OnBeforeDelete,
+  type OnEdgesChange,
   type OnMove,
   type OnNodesChange,
   Panel,
@@ -15,6 +17,12 @@ import {
   type Viewport,
 } from "@xyflow/react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  AgentInspector,
+  SeedTeam,
+  toFlowEdge,
+} from "@/features/agents/AgentPanels"
+import { useIsValidConnection } from "@/features/agents/canConnect"
 import {
   type BoardChanges,
   type Board as BoardData,
@@ -74,6 +82,13 @@ function Canvas({
   const [nodes, setNodes] = useState(() => initial.nodes.map(toNode))
   const [viewport] = useState(() => asViewport(initial.viewport))
   const rf = useReactFlow()
+  const isValidConnection = useIsValidConnection()
+  // Temporary read-only edges for #7; #6 replaces them with its own edge state.
+  const [edges, setEdges] = useState(() => initial.edges.map(toFlowEdge))
+  const onEdgesChange: OnEdgesChange = useCallback(
+    (c) => setEdges((es) => applyEdgeChanges(c, es)),
+    []
+  )
 
   // Last persisted state; a flush sends only what differs from it.
   const saved = useRef({
@@ -197,6 +212,9 @@ function Canvas({
       nodes={nodes}
       onNodesChange={onNodesChange}
       nodeTypes={nodeTypes}
+      edges={edges}
+      onEdgesChange={onEdgesChange}
+      isValidConnection={isValidConnection}
       defaultViewport={viewport}
       fitView={!viewport}
       minZoom={0.1}
@@ -215,6 +233,8 @@ function Canvas({
     >
       <DotGrid />
       <ZoomControls />
+      <AgentInspector />
+      {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
     </ReactFlow>
   )
 }

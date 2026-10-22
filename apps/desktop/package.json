@@ -12,6 +12,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
     "@workspace/ui": "workspace:*",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

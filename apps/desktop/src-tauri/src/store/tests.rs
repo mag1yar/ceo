@@ -30,7 +30,7 @@ fn migrates_from_zero_and_is_idempotent() {
     let v: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 2);
+    assert_eq!(v, 3);
     let mut tables: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .unwrap()
@@ -45,6 +45,7 @@ fn migrates_from_zero_and_is_idempotent() {
             "board_edges",
             "board_nodes",
             "boards",
+            "messages",
             "projects",
             "sessions"
         ]
@@ -194,6 +195,100 @@ fn ts_types_match_rust() {
         generated,
         "run with UPDATE_TS_TYPES=1 to regenerate"
     );
+}
+
+#[test]
+fn message_states_move_forward_and_only_the_recipient_accepts() {
+    let (_d, s) = store();
+    let p = s.create_project("p", "/tmp/p").unwrap();
+    let m = s
+        .add_message(&p.id, "exec", "ceo", "report", "done", None)
+        .unwrap();
+    assert_eq!(
+        (m.state.as_str(), m.thread.as_str()),
+        ("sent", m.id.as_str())
+    );
+    assert_eq!(m.delivered_via, None);
+    assert_eq!(
+        s.undelivered(&p.id, "ceo").unwrap(),
+        std::slice::from_ref(&m)
+    );
+
+    let w = s.mark_waiting(&m.id, "typed").unwrap().unwrap();
+    assert_eq!(
+        (w.state.as_str(), w.delivered_via.as_deref()),
+        ("waiting", Some("typed"))
+    );
+    assert!(w.waiting_at.is_some());
+    assert_eq!(
+        s.mark_waiting(&m.id, "stop").unwrap(),
+        None,
+        "delivered once"
+    );
+    assert!(s.undelivered(&p.id, "ceo").unwrap().is_empty());
+    assert_eq!(s.inbox(&p.id, "ceo").unwrap(), std::slice::from_ref(&w));
+
+    let e = s.accept_message(&m.id, "exec").unwrap_err();
+    assert!(e.contains("not addressed to you"), "{e}");
+    assert_eq!(s.message(&m.id).unwrap().unwrap().state, "waiting");
+    let a = s.accept_message(&m.id, "ceo").unwrap();
+    assert_eq!(a.state, "accepted");
+    assert!(a.accepted_at.is_some());
+    assert!(
+        s.accept_message(&m.id, "ceo")
+            .unwrap_err()
+            .contains("already accepted")
+    );
+    assert_eq!(s.mark_waiting(&m.id, "typed").unwrap(), None, "never back");
+    assert!(
+        s.accept_message("nope", "ceo")
+            .unwrap_err()
+            .contains("no message")
+    );
+    assert!(s.inbox(&p.id, "ceo").unwrap().is_empty());
+
+    // The board after a restart: unaccepted ones, and an accepted ask until its reply is accepted.
+    let ask = s
+        .add_message(&p.id, "exec", "ceo", "ask", "which?", None)
+        .unwrap();
+    s.accept_message(&ask.id, "ceo").unwrap();
+    let reply = s
+        .add_message(&p.id, "ceo", "exec", "reply", "this", Some(&ask.thread))
+        .unwrap();
+    assert_eq!(reply.thread, ask.thread);
+    assert_eq!(
+        s.reply_in(&ask.thread, "exec").unwrap(),
+        Some(reply.clone())
+    );
+    let ids = |l: Vec<Message>| l.into_iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(s.list_messages(&p.id).unwrap()),
+        [ask.id.clone(), reply.id.clone()]
+    );
+    s.accept_message(&reply.id, "exec").unwrap();
+    assert!(s.list_messages(&p.id).unwrap().is_empty());
+}
+
+#[test]
+fn undelivered_messages_survive_a_reopen() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("m.db");
+    let s = Store::open(&path).unwrap();
+    let p = s.create_project("p", "/tmp/p").unwrap();
+    let a = s
+        .add_message(&p.id, "ceo", "exec", "send", "a", None)
+        .unwrap();
+    let b = s
+        .add_message(&p.id, "ceo", "exec", "send", "b", None)
+        .unwrap();
+    s.mark_waiting(&b.id, "post_tool_use").unwrap();
+    drop(s);
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.undelivered(&p.id, "exec").unwrap(), [a]);
+    assert_eq!(s.inbox(&p.id, "exec").unwrap().len(), 2);
+    // Messages go with their project.
+    s.delete_project(&p.id).unwrap();
+    assert!(s.message(&b.id).unwrap().is_none());
 }
 
 #[test]

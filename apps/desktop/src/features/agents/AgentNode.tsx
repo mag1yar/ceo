@@ -3,6 +3,7 @@ import {
   ArrowsOutSimpleIcon,
   CheckCircleIcon,
   CrownSimpleIcon,
+  LightningIcon,
   QuestionIcon,
   UserIcon,
   UsersThreeIcon,
@@ -132,6 +133,11 @@ const AVATAR: Record<Role, ReactNode> = {
       <UserIcon weight="bold" className="size-3.5" />
     </span>
   ),
+  executor: (
+    <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+      <LightningIcon weight="bold" className="size-3.5" />
+    </span>
+  ),
 }
 
 // Weight follows rank: the CEO carries the heaviest frame, Members the lightest.
@@ -139,6 +145,7 @@ const FRAME: Record<Role, string> = {
   ceo: "rounded-2xl border-2 shadow-lg",
   lead: "rounded-xl border shadow-md",
   member: "rounded-lg border shadow-xs",
+  executor: "rounded-lg border shadow-xs",
 }
 
 function AgentStatus({ className }: { className?: string }) {
@@ -201,3 +208,4 @@ const AgentCard = memo(function AgentCard(props: NodeProps<AgentNode>) {
 export const CeoNode = AgentCard
 export const LeadNode = AgentCard
 export const MemberNode = AgentCard
+export const ExecutorNode = AgentCard

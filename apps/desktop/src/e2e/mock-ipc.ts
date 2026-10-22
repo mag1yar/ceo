@@ -1,6 +1,7 @@
 // Loaded only by `vite --mode e2e`: stands in for the Rust backend with an in-memory store.
 import { emit } from "@tauri-apps/api/event"
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks"
+import { BOARD_EVENT } from "@/features/agents/useSpawned"
 import { BUS_EVENT, type Message } from "@/features/messages/messages"
 import type { Board, BoardChanges, Project } from "@/lib/store"
 
@@ -49,6 +50,7 @@ mockIPC(
 // Message bus driver: specs push each state change as the Rust bus (#19) will, no timers.
 ;(window as { __ceoBus?: object }).__ceoBus = {
   emit: (m: Message) => emit(BUS_EVENT, m),
+  board: (c: object) => emit(BOARD_EVENT, c),
 }
 
 // Mirrors the Rust store's ordering and errors so headless specs see what the real app does.
@@ -170,6 +172,7 @@ function handle(cmd: string, payload: unknown) {
     case "session_delete":
       return null
     case "session_list":
+    case "message_list":
       return []
     // status.ts listens for session status; the mock never emits any.
     case "plugin:event|listen":

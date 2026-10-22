@@ -1,9 +1,10 @@
 // Contract for the agent bus (#19): the Rust side emits the Tauri event `bus://message`
 // with the whole Message as its payload on every state change (sent -> waiting -> accepted).
 // `from` and `to` are agent node ids on the project's board; times are ms since the epoch.
-// There is no command yet: until #19 emits, the real app's store stays empty.
+// `message_list` returns what is still on the board after an app restart.
+import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
-import { useSyncExternalStore } from "react"
+import { useEffect, useSyncExternalStore } from "react"
 
 export const BUS_EVENT = "bus://message"
 
@@ -21,6 +22,8 @@ export type Message = {
   sentAt: number
   waitingAt?: number
   acceptedAt?: number
+  body?: string
+  deliveredVia?: "typed" | "post_tool_use" | "stop" | null
 }
 
 // `live` is what the board draws; `asking` holds senders still waiting for a reply to an ask.
@@ -108,5 +111,23 @@ function subscribe(fn: () => void) {
 export const messagesOf = (projectId: string) =>
   projects.get(projectId)?.snapshot ?? EMPTY
 
-export const useMessages = (projectId: string) =>
-  useSyncExternalStore(subscribe, () => messagesOf(projectId))
+const fetched = new Set<string>()
+
+// Once per project; events that came first stay, since receive never moves a message back.
+function load(projectId: string) {
+  if (fetched.has(projectId)) return
+  fetched.add(projectId)
+  invoke<Message[]>("message_list", { projectId })
+    .then((list) => {
+      for (const m of list) receive(m)
+    })
+    .catch((e) => {
+      fetched.delete(projectId)
+      console.error("message list failed", e)
+    })
+}
+
+export function useMessages(projectId: string) {
+  useEffect(() => load(projectId), [projectId])
+  return useSyncExternalStore(subscribe, () => messagesOf(projectId))
+}

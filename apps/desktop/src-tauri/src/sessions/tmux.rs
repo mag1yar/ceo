@@ -47,6 +47,18 @@ impl Tmux {
             .unwrap_or_default()
     }
 
+    /// Literal text into the pane, as if typed; no key names are interpreted.
+    pub fn type_text(&self, name: &str, text: &str) -> Result<(), String> {
+        self.ok(&["send-keys", "-t", &format!("={name}:"), "-l", text])
+            .map(drop)
+    }
+
+    /// One named key, like `Enter` or `Escape`.
+    pub fn key(&self, name: &str, key: &str) -> Result<(), String> {
+        self.ok(&["send-keys", "-t", &format!("={name}:"), key])
+            .map(drop)
+    }
+
     /// Detached session running `cmd` directly (no shell), with the status bar off and detach-on-destroy on.
     pub fn start(
         &self,

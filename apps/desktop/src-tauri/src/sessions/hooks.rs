@@ -57,6 +57,10 @@ pub fn status_for(event: &Value) -> Option<(&'static str, String)> {
         "UserPromptSubmit" | "PostToolUse" => ("working", "Thinking".into()),
         "PreToolUse" => ("working", format!("Running {tool}")),
         "PermissionRequest" => ("waiting", format!("Needs permission for {tool}")),
+        // Claude Code's idle reminder: the prompt is free, so it stays deliverable.
+        "Notification" if event["notification_type"] == "idle_prompt" => {
+            ("idle", text("message", "Waiting for input"))
+        }
         "Notification" => ("waiting", text("message", "Needs your input")),
         "Stop" => ("idle", "Turn finished".into()),
         "StopFailure" => ("error", text("last_assistant_message", "The turn failed")),
@@ -90,8 +94,8 @@ pub fn token_ok(expected: &str, header: Option<&str>) -> bool {
             == 0
 }
 
-/// `POST /hook/<session id>` with the bearer token; the handler gets id, Authorization header and body, and returns the status code.
-pub type Handler = dyn Fn(&str, Option<&str>, &[u8]) -> u16 + Send + Sync;
+/// A POST with its path, Authorization header and body; the handler answers with a status code and a JSON body (empty for none).
+pub type Handler = dyn Fn(&str, Option<&str>, &[u8]) -> (u16, String) + Send + Sync;
 
 pub fn serve(listener: TcpListener, handler: Arc<Handler>) {
     std::thread::spawn(move || {
@@ -107,9 +111,9 @@ const MAX_BODY: usize = 1024 * 1024;
 
 fn respond(stream: TcpStream, handler: &Handler) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let code = read_request(&stream).map_or_else(
-        |c| c,
-        |(id, auth, body)| handler(&id, auth.as_deref(), &body),
+    let (code, body) = read_request(&stream).map_or_else(
+        |c| (c, String::new()),
+        |(path, auth, body)| handler(&path, auth.as_deref(), &body),
     );
     let reason = match code {
         200 => "OK",
@@ -118,8 +122,11 @@ fn respond(stream: TcpStream, handler: &Handler) {
         _ => "Bad Request",
     };
     let _ = (&stream).write_all(
-        format!("HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .as_bytes(),
+        format!(
+            "HTTP/1.1 {code} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .as_bytes(),
     );
 }
 
@@ -156,12 +163,8 @@ fn read_request(stream: &TcpStream) -> Result<Request, u16> {
     let mut r = r.into_inner();
     let mut body = vec![0; len];
     r.read_exact(&mut body).map_err(|_| 400u16)?;
-    let id = match target.as_slice() {
-        [method, path] if method == "POST" => path.strip_prefix("/hook/"),
-        _ => None,
-    };
-    match id {
-        Some(id) if !id.is_empty() && !id.contains('/') => Ok((id.to_string(), auth, body)),
+    match target.as_slice() {
+        [method, path] if method == "POST" => Ok((path.clone(), auth, body)),
         _ => Err(404),
     }
 }

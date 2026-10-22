@@ -5,6 +5,7 @@ mod sessions;
 mod store;
 mod terminal;
 
+pub use sessions::shim::run as mcp_shim;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,6 +39,7 @@ pub fn run() {
             store::project_reorder,
             store::board_load,
             store::board_save,
+            store::message_list,
             git::project_is_git,
             terminal::terminal_open,
             terminal::terminal_write,

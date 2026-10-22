@@ -124,6 +124,12 @@ async function handle(text) {
   return asked
 }
 
+// A submitted prompt; its hook may bring messages that waited for a free pane.
+async function prompt(text) {
+  const answer = await post("UserPromptSubmit", { prompt: text })
+  return handle(answer?.hookSpecificOutput?.additionalContext)
+}
+
 async function stop() {
   const answer = await post("Stop", { stop_hook_active: false })
   if (answer?.decision === "block") {
@@ -134,7 +140,7 @@ async function stop() {
 
 // CEO: a typed task becomes one executor, with a note it gets while busy.
 async function task(line) {
-  await post("UserPromptSubmit", { prompt: line })
+  await prompt(line)
   const spawned = await tool("spawn_executor", {
     title: line,
     brief:
@@ -147,13 +153,13 @@ async function task(line) {
 
 // The typed pointer: read the inbox; after answering an ask, think a while so the report lands on this turn's Stop.
 async function pointer(line) {
-  await post("UserPromptSubmit", { prompt: line })
-  if (await handle(await tool("inbox"))) await sleep(3000)
+  const asked = await prompt(line)
+  if ((await handle(await tool("inbox"))) || asked) await sleep(3000)
   await stop()
 }
 
 async function execute() {
-  await post("UserPromptSubmit", { prompt: brief })
+  await prompt(brief)
   let r = await tool("ask", { body: "Which file should I write?" })
   while (r.includes('"pending"'))
     r = await tool("ask", { resume: JSON.parse(r.split("\n")[0]).pending })
@@ -199,7 +205,7 @@ if (role === "executor" && brief && !resumed) await execute()
 
 const words = {
   work: async () => {
-    await post("UserPromptSubmit", { prompt: "work" })
+    await prompt("work")
     await post("PreToolUse", { tool_name: "Bash" })
     out("✻ Working… (esc to interrupt)\r\n")
   },

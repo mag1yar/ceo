@@ -218,10 +218,15 @@ impl Sessions {
             .path;
         let id = uuid();
         let short = &id[..8];
-        // A non-git project runs the session in the project folder itself.
-        let base = match parent {
-            Some(p) => p.worktree.as_deref().and_then(worktree::head),
-            None => worktree::head(&repo),
+        // A non-git project runs the session in the project folder itself; a git one never falls back to it.
+        let base = match (worktree::head(&repo), parent) {
+            (Some(_), Some(p)) => Some(
+                p.worktree
+                    .as_deref()
+                    .and_then(worktree::head)
+                    .ok_or("cannot read the HEAD of the parent's worktree, so there is no branch to start from")?,
+            ),
+            (head, _) => head,
         };
         let (worktree, branch) = match base {
             Some(base) => {
@@ -464,6 +469,13 @@ fn on_hook<R: Runtime>(
                     "permissionDecisionReason": why,
                 } })
             }),
+        // A prompt the owner typed brings what waited for a free pane.
+        "UserPromptSubmit" => bus::deliver_by_hook(app, row, "user_prompt_submit").map(|text| {
+            serde_json::json!({ "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": text,
+            } })
+        }),
         "PostToolUse" => {
             if event["tool_name"]
                 .as_str()

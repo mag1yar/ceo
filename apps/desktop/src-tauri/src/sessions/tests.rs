@@ -136,6 +136,36 @@ fn watchdog_idles_only_a_quiet_working_session_at_its_prompt() {
     );
 }
 
+// Claude Code 2.1.308 screens from `tmux capture-pane -e -p`, trimmed to the rows that matter.
+#[test]
+fn a_pointer_is_typed_only_into_an_empty_prompt() {
+    let rule = "\x1b[38;5;244m────────────────────────────────────────\x1b[39m";
+    let footer = "  \x1b[38;5;211m⏵⏵ auto mode on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m";
+    let screen = |input: &str| {
+        format!(
+            "\x1b[38;5;246m\x1b[48;5;237m❯\x1b[39m \x1b[38;5;231m/model\x1b[39m \x1b[49m\n\n{rule}\n{input}\n{rule}\n{footer}\n"
+        )
+    };
+    assert!(hooks::prompt_empty(&screen("\x1b[39m❯ ")), "empty");
+    assert!(
+        hooks::prompt_empty(&screen(
+            "\x1b[39m❯ \x1b[2mTry \"write a test for <filepath>\"\x1b[0m"
+        )),
+        "the dim placeholder of an empty prompt"
+    );
+    assert!(
+        !hooks::prompt_empty(&screen("\x1b[39m❯ fix the half typed")),
+        "the owner's draft"
+    );
+    let picker = "   Select model\n\n     1.  Default (recommended)\n   \x1b[38;5;153m❯\x1b[39m \x1b[38;5;246m2.  \x1b[38;5;114mOpus 5.5\x1b[39m\n     3.  Sonnet 5.5\n\n   \x1b[38;5;246mEnter to set as default · s to use this session only · Esc to cancel\x1b[39m\n";
+    assert!(!hooks::prompt_empty(picker), "a picker");
+    let trust = " Accessing workspace:\n\n /private/tmp/x\n\n Quick safety check: Is this a project you created or one you trust?\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel\n";
+    assert!(!hooks::prompt_empty(trust), "the trust dialog");
+    let busy = format!("✻ Thinking… (esc to interrupt)\n{}", screen("\x1b[39m❯ "));
+    assert!(!hooks::prompt_empty(&busy), "a running turn");
+    assert!(!hooks::prompt_empty(""), "no claude prompt at all");
+}
+
 #[test]
 fn reconcile_sorts_live_dead_and_orphans() {
     let rows = [row("a", "ceo-live"), row("b", "ceo-dead")];
@@ -446,6 +476,11 @@ fn push_guard_finds_every_git_push_and_gh() {
         "p=push; git $p",
         "git $(echo push)",
         "echo push | xargs git",
+        "git config alias.p push",
+        "git config --global alias.p push",
+        "git config set Alias.p push",
+        "git config --add alias.p '!git push'",
+        "git -c Alias.p=push p",
     ] {
         assert!(guard::deny(cmd).is_some(), "should deny: {cmd}");
     }
@@ -464,6 +499,10 @@ fn push_guard_finds_every_git_push_and_gh() {
         "git worktree remove x",
         "git reset --soft HEAD~1",
         "command -v git",
+        "git config user.name x",
+        "git config --get alias.p",
+        "git config get alias.p",
+        "git config --list",
         "",
     ] {
         assert_eq!(guard::deny(cmd), None, "should allow: {cmd}");
@@ -586,6 +625,14 @@ fn bus_tools_by_role_and_links_checked() {
     );
     let e = tool(&app, &e2, "accept", json!({"id": m.id})).unwrap_err();
     assert!(e.contains("not addressed to you"), "{e}");
+    // A reply takes only an ask: replying to a report would accept it without ending its executor.
+    let e = tool(&app, &ceo, "reply", json!({"id": m.id, "body": "ok"})).unwrap_err();
+    assert!(
+        e.contains("not an ask") && e.contains("mcp__ceo__accept"),
+        "{e}"
+    );
+    assert_eq!(store.message(&m.id).unwrap().unwrap().state, "sent");
+    assert!(store.reply_in(&m.thread, "e1").unwrap().is_none());
     let text = tool(&app, &ceo, "inbox", json!({})).unwrap();
     assert!(text.contains(&m.id) && text.contains("done"), "{text}");
     assert_eq!(
@@ -735,6 +782,33 @@ fn hooks_answer_with_the_push_guard_and_with_messages_for_a_busy_agent() {
         "the blocked turn goes on"
     );
 
+    // Waiting on a free pane, a message comes with the next prompt the owner submits.
+    let c = bus::send(app.handle(), &ceo, &e1, "send", "and docs", None).unwrap();
+    let ctx = hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "go on"}));
+    assert_eq!(
+        ctx["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(
+        ctx["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains("and docs")
+    );
+    assert_eq!(
+        store
+            .message(&c.id)
+            .unwrap()
+            .unwrap()
+            .delivered_via
+            .as_deref(),
+        Some("user_prompt_submit")
+    );
+    assert_eq!(
+        hook(json!({"hook_event_name": "UserPromptSubmit", "prompt": "more"})),
+        json!(null)
+    );
+
     // The bus routes need the same token.
     assert_eq!(post(port, "/bus/e1/tools", Some("Bearer nope"), "{}"), 401);
     assert_eq!(
@@ -844,7 +918,12 @@ fn wait_until(what: &str, mut ok: impl FnMut() -> bool) {
 
 fn sleeper(d: &Path) -> Bins {
     let stub = d.join("claude");
-    std::fs::write(&stub, "#!/bin/sh\necho \"$@\" > args\nexec sleep 600\n").unwrap();
+    // An empty claude prompt, drawn again after every line typed into it.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho \"$@\" > args\nprintf '❯ '\nwhile read -r l; do printf '❯ '; done\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     Bins {
         tmux: "tmux".into(),
@@ -886,7 +965,7 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
         &["commit", "-q", "--allow-empty", "-m", "ceo work"],
     );
 
-    let brief = json!({"title": "Add hello file!", "brief": "- write hello.txt", "effort": "low"});
+    let brief = json!({"title": "Add hello file!", "brief": "- write hello.txt;", "effort": "low"});
     let out = tool(&app, &ceo, "spawn_executor", brief).unwrap();
     let spawned: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
     let node = spawned["node"].as_str().unwrap().to_string();
@@ -913,8 +992,8 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
         "{args}"
     );
     assert!(
-        args.ends_with("--model haiku --effort low -- - write hello.txt\n"),
-        "model from the CEO's node: {args}"
+        args.ends_with("--model haiku --effort low -- - write hello.txt;\n"),
+        "model from the CEO's node, the brief's trailing ; kept: {args}"
     );
     let mcp = std::fs::read_to_string(s.session_dir(&exec.id).join("mcp.json")).unwrap();
     let mcp: serde_json::Value = serde_json::from_str(&mcp).unwrap();
@@ -938,6 +1017,20 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
             .iter()
             .any(|e| e.source == "ceo-node" && e.target == node && e.data["kind"] == "spawn")
     );
+    // An interrupt leaves a booting executor "Starting", so nothing is typed into it yet.
+    let note = tool(
+        &app,
+        &ceo,
+        "interrupt",
+        json!({"to": node, "body": "one file"}),
+    )
+    .unwrap();
+    let exec_now = store.session(&exec.id).unwrap().unwrap();
+    assert_eq!(
+        (exec_now.status.as_str(), exec_now.action.as_str()),
+        ("working", "Starting"),
+        "{note}"
+    );
     let bad = json!({"title": "t", "brief": "b", "model": "gpt"});
     assert!(tool(&app, &ceo, "spawn_executor", bad).is_err());
 
@@ -947,6 +1040,9 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
     store
         .set_session_status(&exec.id, "idle", "Turn finished")
         .unwrap();
+    // An ask the CEO never answers; the mock bus gives up waiting at once.
+    let pending = tool(&app, &exec, "ask", json!({"body": "which file?"})).unwrap();
+    assert!(pending.contains("\"pending\""), "{pending}");
     // What the CEO's SessionStart would say; a "Starting" pane is never typed into.
     store.set_session_status(&ceo.id, "idle", "Ready").unwrap();
     tool(&app, &exec, "report", json!({"body": "secret result text"})).unwrap();
@@ -959,10 +1055,14 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
     });
     let pane = tmux.capture(&ceo.tmux_name);
     assert!(
-        pane.contains("1 new message, call mcp__ceo__inbox"),
+        pane.contains("2 new messages, call mcp__ceo__inbox"),
         "{pane}"
     );
     assert!(!pane.contains("secret result text"));
+    wait_until(
+        "Enter follows the pointer and the prompt is drawn again",
+        || tmux.capture(&ceo.tmux_name).matches('❯').count() == 2,
+    );
 
     let m = store.inbox(&p.id, "ceo-node").unwrap().pop().unwrap();
     tool(&app, &ceo, "accept", json!({"id": m.id})).unwrap();
@@ -978,6 +1078,18 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
             .all(|n| n.id != node)
     });
     assert!(store.load_board(&p.id).unwrap().edges.is_empty());
+    // What nobody can accept now is closed, never accepted: off the board and out of the CEO's inbox.
+    assert!(
+        store.inbox(&p.id, "ceo-node").unwrap().is_empty(),
+        "no orphaned ask"
+    );
+    assert!(store.list_messages(&p.id).unwrap().is_empty());
+    let ask: serde_json::Value = serde_json::from_str(pending.lines().next().unwrap()).unwrap();
+    let send = note.trim_end_matches('.').rsplit(' ').next().unwrap();
+    for id in [ask["pending"].as_str().unwrap(), send] {
+        let m = store.message(id).unwrap().unwrap();
+        assert!(m.closed_at.is_some() && m.state != "accepted", "{m:?}");
+    }
     assert!(!wt.exists(), "the worktree is removed");
     assert_eq!(
         git(&repo, &["log", "-1", "--format=%s", &branch]),
@@ -1010,4 +1122,36 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
         store.message(&late.id).unwrap().unwrap().state == "waiting"
     });
     app.state::<Sessions>().remove(&store, &ceo).unwrap();
+}
+
+#[test]
+fn a_spawned_session_in_a_git_project_never_falls_back_to_the_project_folder() {
+    let (d, repo) = repo();
+    let app = mock_app(d.path(), Err("unused".into()), "unused");
+    let (s, store) = (app.state::<Sessions>(), app.state::<Store>());
+    let p = store.create_project("p", repo.to_str().unwrap()).unwrap();
+    let mut ceo = session("ceo", &p.id, "ceo", None);
+    ceo.worktree = Some(d.path().join("gone").to_string_lossy().into());
+    let e = s
+        .create(&store, &p.id, "exec", "executor", Some(&ceo), "exec")
+        .unwrap_err();
+    assert!(e.contains("HEAD"), "{e}");
+    assert!(store.node_session(&p.id, "exec").unwrap().is_none());
+
+    // A non-git project has no branch to start from, so its sessions run in the folder.
+    let plain = tempfile::tempdir().unwrap();
+    let q = store
+        .create_project("q", plain.path().to_str().unwrap())
+        .unwrap();
+    let row = s
+        .create(
+            &store,
+            &q.id,
+            "exec",
+            "executor",
+            Some(&session("ceo", &q.id, "ceo", None)),
+            "exec",
+        )
+        .unwrap();
+    assert_eq!((row.worktree, row.branch), (None, None));
 }

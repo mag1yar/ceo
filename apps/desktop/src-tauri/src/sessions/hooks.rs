@@ -80,6 +80,38 @@ pub fn missed_stop(status: &str, quiet: Duration, pane: &str) -> bool {
         && !pane.contains("esc to interrupt")
 }
 
+/// Claude Code's input prompt holds no draft and nothing modal shows, on a `capture-pane -e` screen: the last `❯` line
+/// has nothing after it but the dim placeholder, and no dialog footer or running turn is visible.
+pub fn prompt_empty(pane: &str) -> bool {
+    if ["Esc to cancel", "Enter to confirm", "esc to interrupt"]
+        .iter()
+        .any(|t| pane.contains(t))
+    {
+        return false;
+    }
+    let Some((_, after)) = pane.lines().rev().find_map(|l| l.split_once('❯')) else {
+        return false;
+    };
+    // Text drawn under SGR 2 (dim) is the placeholder; anything else visible is a draft or a picker entry.
+    let (mut dim, mut it) = (false, after.chars());
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            let seq: String = it
+                .by_ref()
+                .take_while(|c| !c.is_ascii_alphabetic())
+                .collect();
+            match seq.trim_start_matches('[') {
+                "2" => dim = true,
+                "" | "0" | "22" => dim = false,
+                _ => {}
+            }
+        } else if !c.is_whitespace() && !dim {
+            return false;
+        }
+    }
+    true
+}
+
 /// Constant time, so the loopback port cannot be used to guess a token byte by byte.
 pub fn token_ok(expected: &str, header: Option<&str>) -> bool {
     let Some(got) = header.and_then(|h| h.strip_prefix("Bearer ")) else {

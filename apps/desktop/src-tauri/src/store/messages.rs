@@ -3,7 +3,10 @@
 use super::{Message, NOW_MS, Res, Store, err};
 use rusqlite::{OptionalExtension, params};
 
-const COLS: &str = "id, project_id, from_node, to_node, thread, kind, body, state, delivered_via, sent_at, waiting_at, accepted_at";
+const COLS: &str = "id, project_id, from_node, to_node, thread, kind, body, state, delivered_via, sent_at, waiting_at, accepted_at, closed_at";
+/// What the board still draws: open, and unaccepted or an ask whose reply is not accepted yet.
+const LIVE: &str = "closed_at IS NULL AND (state <> 'accepted' OR (kind = 'ask' AND NOT EXISTS (
+    SELECT 1 FROM messages r WHERE r.thread = messages.thread AND r.kind = 'reply' AND r.state = 'accepted')))";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Message> {
     Ok(Message {
@@ -19,6 +22,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Message> {
         sent_at: r.get(9)?,
         waiting_at: r.get(10)?,
         accepted_at: r.get(11)?,
+        closed_at: r.get(12)?,
     })
 }
 
@@ -67,7 +71,7 @@ impl Store {
     /// Stored but not yet delivered to the node.
     pub fn undelivered(&self, project_id: &str, to: &str) -> Res<Vec<Message>> {
         self.query_messages(
-            "project_id = ?1 AND to_node = ?2 AND state = 'sent'",
+            "project_id = ?1 AND to_node = ?2 AND state = 'sent' AND closed_at IS NULL",
             &[project_id, to],
         )
     }
@@ -75,7 +79,7 @@ impl Store {
     /// Everything the node has not accepted yet.
     pub fn inbox(&self, project_id: &str, to: &str) -> Res<Vec<Message>> {
         self.query_messages(
-            "project_id = ?1 AND to_node = ?2 AND state <> 'accepted'",
+            "project_id = ?1 AND to_node = ?2 AND state <> 'accepted' AND closed_at IS NULL",
             &[project_id, to],
         )
     }
@@ -93,11 +97,22 @@ impl Store {
 
     /// What the board draws after a restart: unaccepted messages, and asks still waiting for an accepted reply.
     pub fn list_messages(&self, project_id: &str) -> Res<Vec<Message>> {
-        self.query_messages(
-            "project_id = ?1 AND (state <> 'accepted' OR (kind = 'ask' AND NOT EXISTS (
-                SELECT 1 FROM messages r WHERE r.thread = messages.thread AND r.kind = 'reply' AND r.state = 'accepted')))",
-            &[project_id],
-        )
+        self.query_messages(&format!("project_id = ?1 AND {LIVE}"), &[project_id])
+    }
+
+    /// Closes what the board still draws to or from a node that is gone; their state stays, accepted is never set here.
+    pub fn close_messages(&self, project_id: &str, node: &str) -> Res<Vec<Message>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "UPDATE messages SET closed_at = {NOW_MS}
+                 WHERE project_id = ?1 AND (to_node = ?2 OR from_node = ?2) AND {LIVE} RETURNING {COLS}"
+            ))
+            .map_err(err)?;
+        stmt.query_map(params![project_id, node], row)
+            .map_err(err)?
+            .collect::<Result<_, _>>()
+            .map_err(err)
     }
 
     /// `sent` -> `waiting`; None when it was already delivered, so two paths never deliver one message twice.

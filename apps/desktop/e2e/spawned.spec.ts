@@ -76,16 +76,24 @@ async function open(page: Page) {
   return projectId
 }
 
-// On the first frame `selector` matches: the properties its running transitions animate.
+// On the first frame `selector` matches: the properties its running transitions and animations move.
 const transitions = (page: Page, selector: string) =>
   page.evaluate(async (selector) => {
     for (;;) {
       const el = document.querySelector(selector)
       if (el)
-        return el
-          .getAnimations()
-          .map((a) => (a as CSSTransition).transitionProperty)
-          .sort()
+        return [
+          ...new Set(
+            el.getAnimations().flatMap((a) =>
+              a instanceof CSSTransition
+                ? [a.transitionProperty]
+                : (a.effect as KeyframeEffect)
+                    .getKeyframes()
+                    .flatMap((k) => Object.keys(k))
+                    .filter((k) => !/offset|easing|composite/i.test(k))
+            )
+          ),
+        ].sort()
       await new Promise(requestAnimationFrame)
     }
   }, selector)
@@ -127,6 +135,18 @@ for (const reduced of [false, true])
     await rust(page, projectId, { deleteNodeIds: [exec.id] })
     expect(await leaving).toEqual(motion)
     expect(await edgeOut).toEqual(["opacity"])
+    // It stays on the board until its leave is over, then goes.
+    const left = await page.evaluate(async () => {
+      const el = document.querySelector(".react-flow__node-executor > *")
+      const a = el?.getAnimations().find((a) => !(a instanceof CSSAnimation))
+      const end = Number(a?.effect?.getComputedTiming().endTime)
+      await a?.finished
+      return {
+        end,
+        there: !!document.querySelector(".react-flow__node-executor"),
+      }
+    })
+    expect(left).toEqual({ end: 200, there: true })
     // A second delete while it leaves changes nothing.
     await rust(page, projectId, { deleteNodeIds: [exec.id] })
     await expect(page.locator(".react-flow__node-executor")).toHaveCount(0)

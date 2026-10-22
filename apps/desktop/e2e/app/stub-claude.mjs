@@ -116,8 +116,8 @@ async function handle(text) {
       asked = true
       await tool("reply", { id: mid, body: "hello.txt" })
     } else {
-      // Long enough to see the signal wait at its receiver.
-      if (kind === "report") await sleep(1500)
+      // A few seconds, as a real CEO reads a report before it accepts.
+      if (kind === "report") await sleep(3000)
       await tool("accept", { id: mid })
     }
   }
@@ -138,13 +138,16 @@ async function stop() {
   }
 }
 
+// A task that says "idle" gets its report typed into the idle CEO, as with a real claude, instead of on the CEO's Stop.
+let idleReport = false
+
 // CEO: a typed task becomes one executor, with a note it gets while busy.
 async function task(line) {
   await prompt(line)
+  idleReport = line.includes("idle")
   const spawned = await tool("spawn_executor", {
     title: line,
-    brief:
-      "Write the file the CEO names, commit it, check it exists, then report.",
+    brief: `Write the file the CEO names, commit it, check it exists, then report.${idleReport ? " Pause before you report." : ""}`,
   })
   const { node } = JSON.parse(spawned.split("\n")[0])
   await tool("send", { to: node, body: "Keep it to one file." })
@@ -154,7 +157,8 @@ async function task(line) {
 // The typed pointer: read the inbox; after answering an ask, think a while so the report lands on this turn's Stop.
 async function pointer(line) {
   const asked = await prompt(line)
-  if ((await handle(await tool("inbox"))) || asked) await sleep(3000)
+  if (((await handle(await tool("inbox"))) || asked) && !idleReport)
+    await sleep(3000)
   await stop()
 }
 
@@ -180,6 +184,7 @@ async function execute() {
     git("add", file)
     git("commit", "-qm", `Add ${file}`)
   })
+  if (brief.includes("Pause before you report")) await sleep(2000)
   await tool("report", {
     body: `Committed ${file}; check test -f ${file}: passed`,
   })

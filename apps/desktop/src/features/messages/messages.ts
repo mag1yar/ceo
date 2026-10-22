@@ -37,8 +37,8 @@ export type Message = {
 // `live` is what the board draws; `asking` holds senders still waiting for a reply to an ask.
 export type Messages = { live: Message[]; asking: string[] }
 
-// An accepted message stays this long so its signal can play the absorb, then it goes.
-export const LEAVE_MS = 400
+// An accepted message stays this long so its signal can merge into the receiver and the receiver pulse, then it goes.
+export const LEAVE_MS = 500
 
 const RANK: Record<MessageState, number> = { sent: 0, waiting: 1, accepted: 2 }
 const KINDS: MessageKind[] = ["report", "ask", "reply", "send"]

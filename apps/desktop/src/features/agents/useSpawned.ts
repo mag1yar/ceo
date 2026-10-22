@@ -40,12 +40,24 @@ const leave = <T extends Node | Edge>(x: T): T => ({
   draggable: false,
   connectable: false,
 })
-const leaveMs = () =>
-  Number.parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue(
-      "--duration-base"
+const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)" // --ease-out
+const LEAVE_MS = 200 // --duration-base
+
+// Plays the leave on what is on screen; resolves when it ends, at once for what is not drawn.
+function fadeOut(selector: string, scale: boolean) {
+  return document
+    .querySelector(selector)
+    ?.animate(
+      scale
+        ? [
+            { opacity: 1, transform: "none" },
+            { opacity: 0, transform: "scale(0.9)" },
+          ]
+        : [{ opacity: 1 }, { opacity: 0 }],
+      { duration: LEAVE_MS, easing: EASE_OUT, fill: "forwards" }
     )
-  ) || 0
+    .finished.catch(() => {})
+}
 
 // Rust owns these items, so the board's diff-based save must never delete or revive them; undo and redo are corrected.
 export function useSpawned(
@@ -108,7 +120,21 @@ export function useSpawned(
         ...addE.map((e) => spawn(toEdge(e))),
       ])
       if (!gone.size && !c.deleteEdgeIds?.length) return
-      setTimeout(() => {
+      const move = !matchMedia("(prefers-reduced-motion: reduce)").matches
+      // Removed once their own animations end, not on a guessed timer.
+      Promise.all([
+        ...[...gone].map((id) =>
+          fadeOut(`.react-flow__node[data-id="${CSS.escape(id)}"] > *`, move)
+        ),
+        ...[...s.edges.values()]
+          .filter(goneEdge)
+          .map((e) =>
+            fadeOut(
+              `.react-flow__edge[data-id="${CSS.escape(e.id)}"] .react-flow__edge-path`,
+              false
+            )
+          ),
+      ]).then(() => {
         for (const id of gone) {
           s.nodes.delete(id)
           o.leaving.delete(id)
@@ -121,7 +147,7 @@ export function useSpawned(
           }
         setNodes((ns) => ns.filter((n) => !gone.has(n.id)))
         setEdges((es) => es.filter((e) => !goneEdge(e)))
-      }, leaveMs())
+      })
     })
     return () => {
       off.then((f) => f()).catch(console.error)

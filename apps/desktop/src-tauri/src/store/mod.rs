@@ -27,14 +27,15 @@ impl Store {
     }
 
     fn conn(&self) -> Res<std::sync::MutexGuard<'_, Connection>> {
-        self.0.lock().map_err(err)
+        // SQLite rolls back an open transaction itself, so a poisoned lock is safe to reuse.
+        Ok(self.0.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     pub fn list_projects(&self) -> Res<Vec<Project>> {
         let conn = self.conn()?;
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT {PROJECT_COLS} FROM projects ORDER BY position"
+                "SELECT {PROJECT_COLS} FROM projects ORDER BY position, created_at"
             ))
             .map_err(err)?;
         stmt.query_map([], project_row)
@@ -172,6 +173,26 @@ impl Store {
             )
             .map_err(err)?;
         }
+        // Deletes run before upserts so a node deleted and re-added in one batch survives.
+        for id in &c.delete_edge_ids {
+            tx.execute(
+                "DELETE FROM board_edges WHERE project_id = ?1 AND id = ?2",
+                params![project_id, id],
+            )
+            .map_err(err)?;
+        }
+        for id in &c.delete_node_ids {
+            tx.execute(
+                "DELETE FROM board_nodes WHERE project_id = ?1 AND id = ?2",
+                params![project_id, id],
+            )
+            .map_err(err)?;
+            tx.execute(
+                "DELETE FROM board_edges WHERE project_id = ?1 AND (source = ?2 OR target = ?2)",
+                params![project_id, id],
+            )
+            .map_err(err)?;
+        }
         for n in &c.upsert_nodes {
             tx.execute(
                 "INSERT INTO board_nodes (id, project_id, type, x, y, width, height, data, z)
@@ -199,20 +220,6 @@ impl Store {
                  ON CONFLICT(project_id, id) DO UPDATE SET source = excluded.source,
                    target = excluded.target, data = excluded.data",
                 params![e.id, project_id, e.source, e.target, e.data.to_string()],
-            )
-            .map_err(err)?;
-        }
-        for id in &c.delete_node_ids {
-            tx.execute(
-                "DELETE FROM board_nodes WHERE project_id = ?1 AND id = ?2",
-                params![project_id, id],
-            )
-            .map_err(err)?;
-        }
-        for id in &c.delete_edge_ids {
-            tx.execute(
-                "DELETE FROM board_edges WHERE project_id = ?1 AND id = ?2",
-                params![project_id, id],
             )
             .map_err(err)?;
         }
@@ -246,35 +253,35 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_list(s: State<Store>) -> Res<Vec<Project>> {
     s.list_projects()
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_create(s: State<Store>, name: String, path: String) -> Res<Project> {
     s.create_project(&name, &path)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_update(s: State<Store>, id: String, name: String, path: String) -> Res<Project> {
     s.update_project(&id, &name, &path)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_touch(s: State<Store>, id: String) -> Res<Project> {
     s.touch_project(&id)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_delete(s: State<Store>, id: String) -> Res<()> {
     s.delete_project(&id)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_reorder(s: State<Store>, ids: Vec<String>) -> Res<()> {
     s.reorder_projects(&ids)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn board_load(s: State<Store>, project_id: String) -> Res<Board> {
     s.load_board(&project_id)
 }
-#[tauri::command]
+#[tauri::command(async)]
 pub fn board_save(s: State<Store>, project_id: String, changes: BoardChanges) -> Res<()> {
     s.save_board(&project_id, &changes)
 }

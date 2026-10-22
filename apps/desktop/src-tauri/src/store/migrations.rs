@@ -38,6 +38,12 @@ CREATE TABLE board_edges (
 
 pub fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // Refuse a database written by a newer build instead of running queries on an unknown schema.
+    if current < 0 || current as usize > MIGRATIONS.len() {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unsupported schema version {current}"
+        )));
+    }
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;

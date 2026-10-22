@@ -102,8 +102,23 @@ fn board_save_and_load() {
     .unwrap();
     let b = s.load_board(&p.id).unwrap();
     assert_eq!(b.viewport, json!({"x": 1, "y": 2, "zoom": 0.5}));
-    assert_eq!(b.nodes, [moved]);
-    assert_eq!(b.edges, [edge]);
+    assert_eq!(b.nodes, [moved.clone()]);
+    assert!(b.edges.is_empty(), "edges of a deleted node are removed");
+
+    s.save_board(
+        &p.id,
+        &BoardChanges {
+            upsert_nodes: vec![moved.clone()],
+            delete_node_ids: vec!["n1".into()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        s.load_board(&p.id).unwrap().nodes,
+        [moved],
+        "re-added node survives its delete"
+    );
 }
 
 #[test]
@@ -169,4 +184,15 @@ fn ts_types_match_rust() {
         generated,
         "run with UPDATE_TS_TYPES=1 to regenerate"
     );
+}
+
+#[test]
+fn refuses_newer_schema() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db.sqlite");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .pragma_update(None, "user_version", 999)
+        .unwrap();
+    assert!(Store::open(&path).is_err());
 }

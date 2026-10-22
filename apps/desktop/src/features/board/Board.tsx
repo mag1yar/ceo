@@ -332,7 +332,9 @@ function Canvas({
       <AgentTerminals projectId={projectId} />
       <SignalLayer projectId={projectId} />
       {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
-      {import.meta.env.DEV && <DemoSignals projectId={projectId} />}
+      {import.meta.env.DEV && import.meta.env.MODE !== "e2e" && (
+        <DemoSignals projectId={projectId} />
+      )}
     </ReactFlow>
   )
 }

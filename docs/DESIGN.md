@@ -106,7 +106,8 @@ Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`,
 
 - Shortcuts match the physical key (`code`), so they work on any layout. They do nothing while the keyboard is in an input, a textarea (the note and diagram editors, xterm's helper), a contenteditable, a menu or an open dialog. The focus mode keys from #15 are the exception and work inside the focused terminal.
 - The menu bar is built in JS with `@tauri-apps/api/menu`: the standard App, Edit and Window menus, plus one menu per registry group. Only Cmd shortcuts become accelerators. Undo and Redo stay the native Edit items so text fields keep their own undo.
-- Measured in the hidden app (#10): WebKit gives the page the keydown first; a cancelled key never reaches the menu, an uncancelled one (Cmd+K in a terminal) is handed on to the menu afterwards. A menu action therefore stands down when the page saw its keys in the last 500ms.
+- Measured in the hidden app (#10): WebKit gives the page the keydown first; a cancelled key never reaches the menu, an uncancelled one is handed on to the menu afterwards. A menu action therefore stands down when the page saw its keys in the last 500ms.
+- Cmd+K opens the palette from a focused terminal too, and focus returns to the terminal when it closes. The terminal has no local clear: tmux owns its screen, and a local clear would blank it until the next redraw.
 - The palette opens and closes without animation (it is opened by keyboard many times a day) and moving through its rows is instant. The help dialog keeps the standard 100ms fade and drops its scale under reduced motion.
 
 ## Message signals

@@ -32,6 +32,8 @@ export type Command = {
   shortcuts?: Shortcut[]
   /** Fires while typing too: focus mode keys work inside the focused terminal. */
   anywhere?: boolean
+  /** Also fires from a focused terminal, which then never sees the keys. */
+  terminal?: boolean
   /** Holding the keys repeats the command. */
   repeats?: boolean
   /** Left out of the app menu: Edit > Undo and Redo own Cmd+Z there, so text fields keep their own undo. */
@@ -57,6 +59,8 @@ export const COMMANDS: Command[] = [
     group: "View",
     icon: MagnifyingGlassIcon,
     shortcuts: [cmd("KeyK")],
+    // A local clear would blank the tmux screen behind the terminal until its next redraw.
+    terminal: true,
   },
   {
     id: "sidebar.toggle",
@@ -225,10 +229,15 @@ export function onKeyDown(e: KeyboardEvent) {
   seen.set(command.id, performance.now())
   const run = handlers.get(command.id)
   if (!run || (e.repeat && !command.repeats)) return
-  if (!command.anywhere && (isTyping(e.target) || inOverlay(e.target))) return
+  const reaches =
+    command.anywhere ||
+    (command.terminal &&
+      e.target instanceof Element &&
+      !!e.target.closest(".xterm"))
+  if (!reaches && (isTyping(e.target) || inOverlay(e.target))) return
   e.preventDefault()
   // Capture phase: the focused terminal never sees the focus mode keys.
-  if (command.anywhere) e.stopPropagation()
+  if (reaches) e.stopPropagation()
   run()
 }
 

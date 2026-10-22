@@ -18,7 +18,13 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Kbd, KbdGroup } from "@workspace/ui/components/kbd"
-import { type KeyboardEvent, useCallback, useEffect, useState } from "react"
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 import { useProjects } from "@/features/projects/projects"
 import { enableMenu, installMenu } from "./menu"
 import {
@@ -40,14 +46,34 @@ export function Commands() {
   const { toggleSidebar } = useAppShell()
   const { add } = useProjects()
   const [open, setOpen] = useState<"palette" | "help" | null>(null)
+  // Opened by keyboard there is no trigger to return to, so focus goes back where it was (a terminal keeps its keys).
+  const back = useRef<Element | null>(null)
+  const remember = useCallback(() => {
+    back.current ??= document.activeElement
+  }, [])
+  // After the close finishes: a command that moved focus on purpose keeps it.
+  const restore = useCallback((opened: boolean) => {
+    if (opened) return
+    const el = back.current
+    back.current = null
+    const idle =
+      !document.activeElement || document.activeElement === document.body
+    if (idle && el instanceof HTMLElement && el.isConnected) el.focus()
+  }, [])
 
   useCommand(
     "palette",
-    useCallback(() => setOpen((o) => (o === "palette" ? null : "palette")), [])
+    useCallback(() => {
+      remember()
+      setOpen((o) => (o === "palette" ? null : "palette"))
+    }, [remember])
   )
   useCommand(
     "help",
-    useCallback(() => setOpen("help"), [])
+    useCallback(() => {
+      remember()
+      setOpen("help")
+    }, [remember])
   )
   useCommand("sidebar.toggle", toggleSidebar)
   useCommand("project.add", add)
@@ -68,19 +94,27 @@ export function Commands() {
   const close = (next: boolean) => !next && setOpen(null)
   return (
     <>
-      <Palette open={open === "palette"} onOpenChange={close} />
-      <ShortcutHelp open={open === "help"} onOpenChange={close} />
+      <Palette
+        open={open === "palette"}
+        onOpenChange={close}
+        onOpenChangeComplete={restore}
+      />
+      <ShortcutHelp
+        open={open === "help"}
+        onOpenChange={close}
+        onOpenChangeComplete={restore}
+      />
     </>
   )
 }
 
-function Palette({
-  open,
-  onOpenChange,
-}: {
+type DialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
-}) {
+  onOpenChangeComplete: (open: boolean) => void
+}
+
+function Palette({ open, onOpenChange, onOpenChangeComplete }: DialogProps) {
   const commands = useAvailableCommands()
   const { projects, select } = useProjects()
   // Close first, so a command that opens a dialog of its own is not covered by the palette.
@@ -100,6 +134,7 @@ function Palette({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
       title="Command palette"
       description="Search for a command or a project"
       // Opened by keyboard many times a day, so it appears and leaves without animation.
@@ -160,12 +195,14 @@ function Palette({
 function ShortcutHelp({
   open,
   onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
+  onOpenChangeComplete,
+}: DialogProps) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={onOpenChangeComplete}
+    >
       <DialogContent
         showCloseButton={false}
         className="gap-3 sm:max-w-md motion-reduce:data-closed:zoom-out-100 motion-reduce:data-open:zoom-in-100"

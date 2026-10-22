@@ -43,19 +43,20 @@ const listen = () =>
     w.seen = []
     addEventListener(
       "keydown",
-      (e) =>
-        w.seen.push({
+      (e) => {
+        const entry = {
           code: e.code,
           target: String((e.target as Element).className),
           prevented: false,
-        }),
+        }
+        w.seen.push(entry)
+        // Read after dispatch: a listener may stop propagation before any later phase runs.
+        setTimeout(() => {
+          entry.prevented = e.defaultPrevented
+        })
+      },
       true
     )
-    // Bubble phase on window runs last, so it reads the final defaultPrevented.
-    addEventListener("keydown", (e) => {
-      const last = w.seen.at(-1)
-      if (last) last.prevented = e.defaultPrevented
-    })
   })
 
 const observed = () =>
@@ -206,7 +207,7 @@ describe("app menu and commands in the hidden app", function () {
     await browser.keys("Escape")
     await expect(palette()).not.toExist()
 
-    // A focused terminal: the page leaves Cmd+K alone, so WebKit may hand it to the menu.
+    // A focused terminal: the page takes Cmd+K for the palette, so the menu never sees it.
     await $(`.react-flow__node[data-id="${ceo.id}"]`)
       .$("button[aria-label='Focus terminal']")
       .click()
@@ -217,14 +218,6 @@ describe("app menu and commands in the hidden app", function () {
           false
       )
     )
-    await browser.execute((id) => {
-      const term = (
-        window as unknown as {
-          e2e: { terminals: Record<string, { write: (s: string) => void }> }
-        }
-      ).e2e.terminals[id]
-      term.write("before-clear\r\n")
-    }, ceo.id)
     const screen = () =>
       browser.execute((id) => {
         const b = (window as unknown as Hook).e2e.terminals[id].buffer.active
@@ -233,21 +226,22 @@ describe("app menu and commands in the hidden app", function () {
           lines.push(b.getLine(i).translateToString(true))
         return lines.join("\n")
       }, ceo.id)
-    await browser.waitUntil(async () =>
-      (await screen()).includes("before-clear")
-    )
-    // The page leaves Cmd+K to xterm, WebKit hands it on to the menu, and the menu action sees the fresh keydown and stands down.
+    // tmux owns the screen now, so the check is that its first line survives Cmd+K.
+    await browser.waitUntil(async () => (await screen()).trim() !== "")
+    const first = (await screen()).trim().split("\n")[0]
     o = await row(
       "Cmd+K, focused terminal",
       "k",
       async () =>
-        `palette ${(await palette().isExisting()) ? "open" : "closed"}, terminal ${(await screen()).includes("before-clear") ? "kept" : "cleared"}`
+        `palette ${(await palette().isExisting()) ? "open" : "closed"}, terminal ${(await screen()).includes(first) ? "kept" : "cleared"}`
     )
     expect(o.seen).toEqual([
-      { code: "KeyK", prevented: false, target: "xterm-helper-textarea" },
+      { code: "KeyK", prevented: true, target: "xterm-helper-textarea" },
     ])
-    expect(o.menu).toEqual(["palette"])
-    expect(await screen()).not.toContain("before-clear")
+    expect(o.menu).toEqual([])
+    expect(await screen()).toContain(first)
+    await expect(palette()).toExist()
+    await browser.keys("Escape")
     await expect(palette()).not.toExist()
 
     const table = [

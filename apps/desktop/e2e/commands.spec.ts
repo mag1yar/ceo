@@ -173,16 +173,16 @@ test("shortcuts run the same commands; ? and Cmd+/ list the registry", async ({
 test("shortcuts stay out of the way while typing", async ({ page }) => {
   await open(page, "alpha")
   // Every app shortcut that the field would otherwise lose.
-  async function pressAll() {
-    for (const key of [
-      "Meta+KeyK",
-      "Meta+KeyB",
-      "Shift+Slash",
-      "Meta+Slash",
-      "KeyN",
-      "Shift+Digit1",
-    ])
-      await page.keyboard.press(key)
+  const keys = [
+    "Meta+KeyK",
+    "Meta+KeyB",
+    "Shift+Slash",
+    "Meta+Slash",
+    "KeyN",
+    "Shift+Digit1",
+  ]
+  async function pressAll(only = keys) {
+    for (const key of only) await page.keyboard.press(key)
   }
   async function nothingHappened(nodes: number) {
     await expect(palette(page)).toBeHidden()
@@ -221,7 +221,7 @@ test("shortcuts stay out of the way while typing", async ({ page }) => {
   await nothingHappened(2)
   await page.keyboard.press("Escape")
 
-  // A focused terminal: Cmd+K clears it and the palette stays closed.
+  // A focused terminal: Cmd+K opens the palette and leaves the screen alone, the rest stay out.
   await toBoard(page)
   await page.getByRole("button", { name: "Seed team" }).click()
   const ceo = page
@@ -249,8 +249,18 @@ test("shortcuts stay out of the way while typing", async ({ page }) => {
   await expect.poll(buffer).toContain("echo kept")
   const nodes = await page.locator(".react-flow__node").count()
   await page.keyboard.press("Meta+KeyK")
-  await expect.poll(buffer).not.toContain("echo kept")
-  await pressAll()
+  await expect(palette(page)).toBeVisible()
+  expect(await buffer()).toContain("echo kept")
+  await page.keyboard.press("Escape")
+  await expect(palette(page)).toBeHidden()
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.classList.contains("xterm-helper-textarea")
+      )
+    )
+    .toBe(true)
+  await pressAll(keys.filter((k) => k !== "Meta+KeyK"))
   await nothingHappened(nodes)
   // The focus mode keys still work inside it.
   await page.keyboard.press("Meta+Escape")

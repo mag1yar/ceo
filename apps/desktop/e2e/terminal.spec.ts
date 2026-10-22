@@ -176,7 +176,7 @@ test("every agent node runs a terminal: overview, focus, keys and delete", async
     animations: "disabled",
   })
 
-  // Cmd+C copies a selection, Cmd+K clears, as in #8.
+  // Cmd+C copies a selection; Cmd+K opens the palette and keeps the screen (tmux owns it).
   await page.evaluate((id) => {
     const w = window as unknown as { copied?: string }
     navigator.clipboard.writeText = async (t: string) => {
@@ -190,7 +190,15 @@ test("every agent node runs a terminal: overview, focus, keys and delete", async
     .toContain("echo one")
 
   await page.keyboard.press("Meta+k")
-  await expect.poll(() => buffer(page, ceo)).not.toContain("echo one")
+  await expect(
+    page.getByRole("dialog", { name: "Command palette" })
+  ).toBeVisible()
+  expect(await buffer(page, ceo)).toContain("echo one")
+  await page.keyboard.press("Escape")
+  await expect(
+    page.getByRole("dialog", { name: "Command palette" })
+  ).toBeHidden()
+  expect(await typingIn(page)).toBe(ceo)
 
   // Next and previous agent without zooming out.
   await page.keyboard.press("Meta+Shift+BracketRight")

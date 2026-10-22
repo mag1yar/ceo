@@ -99,10 +99,6 @@ function open(id: string, projectId: string, cwd: string): Session {
 
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown" || !e.metaKey) return true
-    if (e.key === "k") {
-      term.clear()
-      return false
-    }
     if (e.key === "c" && term.hasSelection()) {
       navigator.clipboard.writeText(term.getSelection()).catch(console.error)
       return false

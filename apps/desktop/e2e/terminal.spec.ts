@@ -207,6 +207,10 @@ test("every agent node runs a terminal: overview, focus, keys and delete", async
   // Header double click focuses; a click on the board outside the node leaves.
   await node(page, "Board").locator("header").dblclick()
   await expect.poll(() => typingIn(page)).toBe(lead)
+  // The focused node survives Backspace after a click on its own header.
+  await node(page, "Board").locator("header").click()
+  await page.keyboard.press("Backspace")
+  await expect(agents(page)).toHaveCount(12)
   const area = await page.locator("[data-slot=board]").boundingBox()
   if (!area) throw new Error("no board")
   await page.mouse.click(area.x + 6, area.y + area.height / 2)

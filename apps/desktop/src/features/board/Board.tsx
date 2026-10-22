@@ -28,7 +28,7 @@ import {
   useState,
 } from "react"
 import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
-import { AgentTerminals } from "@/features/agents/AgentTerminals"
+import { AgentTerminals, focusedId } from "@/features/agents/AgentTerminals"
 import { useIsValidConnection } from "@/features/agents/canConnect"
 import { newDiagram } from "@/features/diagrams/diagram"
 import {
@@ -39,6 +39,7 @@ import {
 } from "@/lib/store"
 import { BoardToolbar } from "./BoardToolbar"
 import { edgeTypes } from "./edgeTypes"
+import { LinkConnectionLine } from "./LinkEdge"
 import { newLink, sameEdge, toBoardEdge, toEdge } from "./link"
 import { nodeTypes } from "./nodeTypes"
 import { newNote } from "./note"
@@ -177,6 +178,8 @@ function Canvas({
   }, [])
   const onBeforeDelete: OnBeforeDelete = useCallback(
     async ({ nodes, edges }) => {
+      // A stray Backspace after clicking the focused node's header must not kill its shell.
+      if (nodes.some((n) => n.id === focusedId())) return false
       if (nodes.length || edges.length) record()
       return true
     },
@@ -217,12 +220,12 @@ function Canvas({
   const onConnect: OnConnect = useCallback(
     (c) => {
       const link = newLink(c)
+      // Ends float, so which dots were used does not make a second link different.
       const twin = latest.current.edges.some(
         (e) =>
           e.source === link.source &&
           e.target === link.target &&
-          e.sourceHandle === link.sourceHandle &&
-          e.targetHandle === link.targetHandle
+          e.type === link.type
       )
       if (c.source === c.target || twin) return
       record()
@@ -301,6 +304,7 @@ function Canvas({
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       connectionMode={ConnectionMode.Loose}
+      connectionLineComponent={LinkConnectionLine}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onDoubleClick={onDoubleClick}

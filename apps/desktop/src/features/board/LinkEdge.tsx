@@ -1,24 +1,37 @@
 import {
   BaseEdge,
+  type ConnectionLineComponentProps,
   EdgeLabelRenderer,
   type EdgeProps,
   getBezierPath,
+  getStraightPath,
+  useInternalNode,
   useReactFlow,
   useStoreApi,
 } from "@xyflow/react"
 import { memo, useState } from "react"
-import type { LinkEdge } from "./link"
+import { floatingEnds, type LinkEdge } from "./link"
+
+// Subscribes to its two nodes only, so a move re-renders just the edges touching it.
+function useFloatingEnds(source: string, target: string) {
+  const s = useInternalNode(source)
+  const t = useInternalNode(target)
+  return s && t ? floatingEnds(s, t) : null
+}
 
 export const LinkEdgeView = memo(function LinkEdgeView({
   id,
+  source,
+  target,
   data,
   selected,
-  ...geometry
 }: EdgeProps<LinkEdge>) {
   const { updateEdgeData } = useReactFlow()
   const flow = useStoreApi()
   const [editing, setEditing] = useState(false)
-  const [path, x, y] = getBezierPath(geometry)
+  const ends = useFloatingEnds(source, target)
+  if (!ends) return null
+  const [path, x, y] = getBezierPath(ends)
   const label = data?.label
   const finish = (value: string) => {
     setEditing(false)
@@ -89,6 +102,46 @@ export const LinkEdgeView = memo(function LinkEdgeView({
     </>
   )
 })
+
+// Agent hierarchy: a plain floating line, no arrow or label.
+export const PlainEdgeView = memo(function PlainEdgeView({
+  source,
+  target,
+}: EdgeProps) {
+  const ends = useFloatingEnds(source, target)
+  return ends && <BaseEdge path={getStraightPath(ends)[0]} />
+})
+
+// Over a valid target the line already takes the floating route the edge will have.
+export function LinkConnectionLine({
+  fromNode,
+  toNode,
+  connectionStatus,
+  fromX,
+  fromY,
+  fromPosition,
+  toX,
+  toY,
+  toPosition,
+}: ConnectionLineComponentProps) {
+  const ends = (toNode &&
+    connectionStatus === "valid" &&
+    floatingEnds(fromNode, toNode)) || {
+    sourceX: fromX,
+    sourceY: fromY,
+    sourcePosition: fromPosition,
+    targetX: toX,
+    targetY: toY,
+    targetPosition: toPosition,
+  }
+  return (
+    <path
+      d={getBezierPath(ends)[0]}
+      fill="none"
+      className="react-flow__connection-path"
+    />
+  )
+}
 
 const focusAll = (el: HTMLInputElement | null) => {
   el?.focus()

@@ -33,6 +33,8 @@ const subscribe = (l: () => void) => {
 export const useFocus = (id: string) =>
   useSyncExternalStore(subscribe, () => (focus?.id === id ? focus : undefined))
 
+export const focusedId = () => focus?.id
+
 export const useFocusedId = () =>
   useSyncExternalStore(subscribe, () => focus?.id)
 

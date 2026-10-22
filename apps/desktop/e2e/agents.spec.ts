@@ -158,16 +158,16 @@ test("seeds a radial team with every status, inspects an agent and refuses Membe
   await page.locator(".react-flow__pane").click({ position: { x: 20, y: 300 } })
   await expect(inspector).toHaveCount(0)
 
-  // Drag from a Member's handle: isValidConnection marks only its own Lead and teammates valid.
-  const handle = (name: string, kind: "source" | "target") =>
-    node(page, name).locator(`.react-flow__handle.${kind}`)
+  // Drag from a Member's side dot onto a node: isValidConnection marks only its own Lead and teammates valid.
+  const handle = (name: string, id: string) =>
+    node(page, name).locator(`.react-flow__handle[data-handleid="${id}"]`)
   async function tryConnect(from: string, to: string) {
-    const a = (await handle(from, "source").boundingBox()) as Box
-    const b = (await handle(to, "target").boundingBox()) as Box
+    const a = (await handle(from, "bottom").boundingBox()) as Box
+    const b = (await node(page, to).boundingBox()) as Box
     await page.mouse.move(centre(a).x, centre(a).y)
     await page.mouse.down()
     await page.mouse.move(centre(b).x, centre(b).y, { steps: 8 })
-    const target = handle(to, "target")
+    const target = handle(to, "body")
     await expect(target).toHaveClass(/connectingto/)
     const valid = await target.evaluate((el) => el.classList.contains("valid"))
     await page.mouse.up()

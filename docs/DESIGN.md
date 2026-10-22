@@ -109,6 +109,17 @@ Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`,
 - Measured in the hidden app (#10): WebKit gives the page the keydown first; a cancelled key never reaches the menu, an uncancelled one (Cmd+K in a terminal) is handed on to the menu afterwards. A menu action therefore stands down when the page saw its keys in the last 500ms.
 - The palette opens and closes without animation (it is opened by keyboard many times a day) and moving through its rows is instant. The help dialog keeps the standard 100ms fade and drops its scale under reduced motion.
 
+## Message signals
+
+Set by task #18. Agent messages show on the board as signals on edges, drawn by `features/messages/SignalLayer.tsx` in React Flow's viewport portal. Messages come from the Tauri event `bus://message` (contract at the top of `features/messages/messages.ts`) into a module store keyed by project, outside the board's state, so a message never re-renders the board or its edges.
+
+- A message is a dot (`--signal`, the accent blue); an `ask` is a diamond in `--signal-ask` (amber), so shape and colour both tell it apart. Markers keep one screen size at any zoom and carry a 2px `--background` ring to separate them from the edge line.
+- `sent`: the dot travels the edge path from sender to receiver (Web Animations on `transform` through points evenly spaced along the path, `--ease-in-out`, 450 to 1200ms by length). It stops 14 screen px short of the receiver's outline: `waiting`. On `accepted` it slides onto the outline, shrinks to 40% and fades in 200ms (`--ease-out`), then is gone.
+- Several waiting at one receiver fold into one marker, the oldest's, showing the count. A stack holding an ask takes the ask's shape and colour.
+- The sender of an ask shows a "Waiting for reply" pill at its top-right corner until the reply in the same thread is accepted.
+- Between nodes without an edge a dashed straight path (`stroke-muted-foreground`, 4 4) stands in while the message is in flight or waiting, and goes when it is accepted.
+- `prefers-reduced-motion: reduce`: no travel and no shrink. The marker appears at the receiver end, the count stays, accept is a fade.
+
 ## Icons
 
 Phosphor only (`@phosphor-icons/react`), 16px default in buttons, regular weight.

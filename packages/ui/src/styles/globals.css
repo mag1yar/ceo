@@ -355,3 +355,24 @@
     --terminal-selection: oklch(0.66 0.17 257 / 35%);
   }
 }
+
+/* #18 message signals on edges: a blue dot per message, an amber diamond for an ask. */
+@theme inline {
+  --color-signal: var(--signal);
+  --color-signal-ask: var(--signal-ask);
+  --color-signal-ask-foreground: var(--signal-ask-foreground);
+}
+
+:root {
+  --signal: oklch(0.56 0.19 257);
+  --signal-ask: oklch(0.7 0.16 65);
+  --signal-ask-foreground: oklch(0.22 0.04 65);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --signal: oklch(0.66 0.17 257);
+    --signal-ask: oklch(0.8 0.15 75);
+    --signal-ask-foreground: oklch(0.22 0.04 65);
+  }
+}

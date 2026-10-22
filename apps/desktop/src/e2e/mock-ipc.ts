@@ -1,5 +1,7 @@
 // Loaded only by `vite --mode e2e`: stands in for the Rust backend with an in-memory store.
+import { emit } from "@tauri-apps/api/event"
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks"
+import { BUS_EVENT, type Message } from "@/features/messages/messages"
 import type { Board, BoardChanges, Project } from "@/lib/store"
 
 // Snapshot in sessionStorage so specs can check persistence across page.reload().
@@ -32,11 +34,22 @@ const terminalOut = new Map<number, { channel: number; index: number }>()
 
 mockWindows("main")
 // Copies, like real IPC: callers must never hold references into the mock store.
-mockIPC((cmd, payload) => {
-  const result = structuredClone(handle(cmd, payload))
-  sessionStorage.setItem(KEY, JSON.stringify({ projects, boards: [...boards] }))
-  return result
-})
+mockIPC(
+  (cmd, payload) => {
+    const result = structuredClone(handle(cmd, payload))
+    sessionStorage.setItem(
+      KEY,
+      JSON.stringify({ projects, boards: [...boards] })
+    )
+    return result
+  },
+  { shouldMockEvents: true }
+)
+
+// Message bus driver: specs push each state change as the Rust bus (#19) will, no timers.
+;(window as { __ceoBus?: object }).__ceoBus = {
+  emit: (m: Message) => emit(BUS_EVENT, m),
+}
 
 // Mirrors the Rust store's ordering and errors so headless specs see what the real app does.
 function handle(cmd: string, payload: unknown) {

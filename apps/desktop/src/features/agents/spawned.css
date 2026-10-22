@@ -1,0 +1,52 @@
+/* Bus-spawned executors and their links: in on the visual root (React Flow owns the wrapper's transform), out in reverse. */
+.react-flow__node.spawned > *,
+.react-flow__node.leaving > * {
+  transition-property: width, height, border-color, opacity, transform;
+  transition-duration:
+    var(--duration-move), var(--duration-move), var(--duration-move),
+    var(--duration-slow), var(--duration-slow);
+  transition-timing-function:
+    var(--ease-spring), var(--ease-spring), var(--ease-spring), var(--ease-out),
+    var(--ease-out);
+}
+.react-flow__edge.spawned .react-flow__edge-path,
+.react-flow__edge.leaving .react-flow__edge-path {
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+
+@starting-style {
+  .react-flow__node.spawned > * {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  .react-flow__edge.spawned .react-flow__edge-path {
+    opacity: 0;
+  }
+}
+
+.react-flow__node.leaving > * {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-duration:
+    var(--duration-move), var(--duration-move), var(--duration-move),
+    var(--duration-base), var(--duration-base);
+}
+.react-flow__edge.leaving .react-flow__edge-path {
+  opacity: 0;
+}
+.react-flow__node.leaving,
+.react-flow__node.leaving *,
+.react-flow__edge.leaving * {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @starting-style {
+    .react-flow__node.spawned > * {
+      transform: none;
+    }
+  }
+  .react-flow__node.leaving > * {
+    transform: none;
+  }
+}

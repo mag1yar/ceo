@@ -1,7 +1,9 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "tasks": {
-    "check": {},
+    "check": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/biome.json"]
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"]
     },

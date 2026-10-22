@@ -1,5 +1,7 @@
 import "@xyflow/react/dist/base.css"
 import { CornersOutIcon, MinusIcon, PlusIcon } from "@phosphor-icons/react"
+import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { Button } from "@workspace/ui/components/button"
 import {
   applyEdgeChanges,
@@ -128,9 +130,9 @@ function Canvas({
     if (edgeDiff.upsert.length) changes.upsertEdges = edgeDiff.upsert
     if (edgeDiff.gone.length) changes.deleteEdgeIds = edgeDiff.gone
     if (vp && !sameViewport(prev.viewport, vp)) changes.viewport = vp
-    if (Object.keys(changes).length === 0) return
+    if (Object.keys(changes).length === 0) return Promise.resolve()
     saved.current = { nodes: next, edges: nextEdges, viewport: vp }
-    store.saveBoard(projectId, changes).catch((e) => {
+    return store.saveBoard(projectId, changes).catch((e) => {
       console.error("board save failed", e)
       // Put this batch's entries back to what the store still holds, then retry.
       const now = saved.current
@@ -155,8 +157,13 @@ function Canvas({
   useEffect(() => {
     closed.current = false
     window.addEventListener("pagehide", flush)
+    // Rust holds the quit until this batch is on disk (or its time bound passes).
+    const quit = listen("app://flush", () =>
+      flush().finally(() => invoke("app_flush_done"))
+    )
     return () => {
       window.removeEventListener("pagehide", flush)
+      quit.then((off) => off())
       closed.current = true
       flush()
     }

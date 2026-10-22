@@ -175,6 +175,7 @@ function handle(cmd: string, payload: unknown) {
     case "plugin:event|listen":
       return 0
     case "plugin:event|unlisten":
+    case "app_flush_done":
       return null
     default:
       throw `mock-ipc: no handler for ${cmd}`

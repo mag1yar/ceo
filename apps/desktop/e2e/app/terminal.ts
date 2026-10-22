@@ -265,7 +265,7 @@ describe("agent terminals in the hidden app", function () {
       )
     }
     const table = [
-      `WebKit helpers: ${webkit.map((p) => `${p} ${sh(`ps -o comm= -p ${p}`).split(".").pop()}`).join(", ")}`,
+      `WebKit helpers: ${webkit.map((p) => `${p} ${sh(`ps -o comm= -p ${p} || true`).split(".").pop()}`).join(", ")}`,
       "| agents | app MB | WebKit MB | total MB |",
       "|---|---|---|---|",
       ...rows,

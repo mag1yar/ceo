@@ -120,7 +120,6 @@ function useFocusMode() {
       if (!focus) back = rf.getViewport()
       const { addSelectedNodes } = flow.getState()
       setFocus({ id, size: fill() })
-      // Selection lifts the node above its neighbours while it is large.
       addSelectedNodes([id])
       const p = node.internals.positionAbsolute
       rf.setViewport(
@@ -145,12 +144,24 @@ function useFocusMode() {
       if (focus && !element(focus.id)?.contains(e.target as Element))
         go(undefined)
     }
+    // A press on the node's frame keeps the keyboard in the shell, or plain Esc reaches React Flow and unselects the node.
+    function onMouseDown(e: MouseEvent) {
+      const t = e.target as Element
+      if (
+        focus &&
+        element(focus.id)?.contains(t) &&
+        !t.closest("[data-slot=node-terminal]")
+      )
+        e.preventDefault()
+    }
     const dom = flow.getState().domNode
     dom?.addEventListener("pointerdown", onPointerDown, true)
+    dom?.addEventListener("mousedown", onMouseDown, true)
     return () => {
       controller = undefined
       unsubscribe()
       dom?.removeEventListener("pointerdown", onPointerDown, true)
+      dom?.removeEventListener("mousedown", onMouseDown, true)
       setFocus(undefined)
     }
   }, [rf, flow])

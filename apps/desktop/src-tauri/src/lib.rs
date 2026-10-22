@@ -47,6 +47,8 @@ pub fn run() {
             e2e::e2e_menu_click,
             #[cfg(feature = "e2e")]
             e2e::e2e_key,
+            #[cfg(feature = "e2e")]
+            e2e::e2e_input,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

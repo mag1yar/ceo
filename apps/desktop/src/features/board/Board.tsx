@@ -321,7 +321,7 @@ function Canvas({
       onMoveEnd={onMoveEnd}
       onBeforeDelete={onBeforeDelete}
       attributionPosition="bottom-left"
-      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)] [--xy-edge-stroke:var(--muted-foreground)] [--xy-edge-stroke-selected:var(--primary)] [--xy-edge-stroke-width:1.5] [--xy-connectionline-stroke:var(--primary)] [--xy-connectionline-stroke-width:1.5]"
+      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)] [--xy-edge-stroke:var(--muted-foreground)] [--xy-edge-stroke-selected:var(--primary)] [--xy-edge-stroke-width:1.5] [--xy-connectionline-stroke:var(--primary)] [--xy-connectionline-stroke-width:1.5] [&_.react-flow\_\_node:has([data-focused])]:z-100000!"
     >
       <DotGrid />
       <ZoomControls />

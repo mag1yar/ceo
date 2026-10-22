@@ -1,4 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
+import { buildTeam } from "../src/features/agents/team"
+import type { BoardNode } from "../src/lib/store"
 
 type Ipc = { invoke: (cmd: string, args?: object) => Promise<unknown> }
 type Call = { cmd: string; id?: number; data?: string; cols?: number }
@@ -242,4 +244,95 @@ test("every agent node runs a terminal: overview, focus, keys and delete", async
   await expect(node(page, "Board")).toContainText("two")
   expect(await count(page, "terminal_open")).toBe(13)
   expect(await count(page, "terminal_close")).toBe(closes + 1)
+})
+
+test("the focused node stays above a diagram without its selection, and a click inside keeps focus", async ({
+  page,
+}, info) => {
+  const ceo = buildTeam().nodes.find((n) => n.type === "ceo") as BoardNode
+  // In the area the focused node grows into, and after the CEO in the store's (z, id) order.
+  const diagram: BoardNode = {
+    id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+    type: "diagram",
+    x: ceo.x + 650,
+    y: ceo.y + 60,
+    width: 360,
+    height: 200,
+    z: 0,
+    data: { source: "flowchart LR\n  Idea --> Plan --> Ship" },
+  }
+  await page.goto("/")
+  await expect(page.locator("[data-slot=app-shell]")).toBeVisible()
+  const { id } = (await ipc(page, "project_create", {
+    name: "focus",
+    path: "/tmp/focus",
+  })) as { id: string }
+  await ipc(page, "board_save", {
+    projectId: id,
+    changes: {
+      upsertNodes: [ceo, diagram],
+      viewport: { x: 100, y: 200, zoom: 0.5 },
+    },
+  })
+  await page.reload()
+  await page
+    .locator("ul[aria-label=Projects] button", { hasText: "focus" })
+    .click()
+  const frame = node(page, "CEO")
+  await frame.getByRole("button", { name: "Focus terminal" }).click()
+  await expect.poll(() => viewport(page)).toMatch(/scale\(1\)/)
+  await expect.poll(() => typingIn(page)).toBe(ceo.id)
+
+  // Centre of the part of the diagram the focused node covers.
+  const at = await page.evaluate(
+    ([a, b]) => {
+      const rect = (id: string) =>
+        (
+          document.querySelector(
+            `.react-flow__node[data-id="${id}"]`
+          ) as Element
+        ).getBoundingClientRect()
+      const [p, q] = [rect(a), rect(b)]
+      return {
+        x: (Math.max(p.left, q.left) + Math.min(p.right, q.right)) / 2,
+        y: (Math.max(p.top, q.top) + Math.min(p.bottom, q.bottom)) / 2,
+      }
+    },
+    [ceo.id, diagram.id]
+  )
+  const top = () =>
+    page.evaluate(
+      ({ x, y }) =>
+        document
+          .elementFromPoint(x, y)
+          ?.closest(".react-flow__node")
+          ?.getAttribute("data-id"),
+      at
+    )
+  expect(await top()).toBe(ceo.id)
+
+  // A press on the header leaves the keyboard in the shell, so plain Escape goes there.
+  const header = { position: { x: 300, y: 24 } }
+  await frame.locator("header").click(header)
+  await page.keyboard.press("Escape")
+  await expect
+    .poll(async () => (await calls(page)).some((c) => c.data === "\x1b"))
+    .toBe(true)
+  expect(await typingIn(page)).toBe(ceo.id)
+  await expect(frame).toHaveClass(/selected/)
+
+  // Cmd+click clears the selection; the node stays on top and a click inside keeps focus.
+  await frame.locator("header").click({ ...header, modifiers: ["Meta"] })
+  await expect(frame).not.toHaveClass(/selected/)
+  await page.keyboard.press("Escape")
+  expect(await top()).toBe(ceo.id)
+  const focused = await viewport(page)
+  await page.mouse.click(at.x, at.y)
+  expect(await viewport(page)).toBe(focused)
+  expect(await typingIn(page)).toBe(ceo.id)
+  await expect(frame.getByRole("button", { name: "Exit focus" })).toBeVisible()
+  await page.screenshot({
+    path: info.outputPath("focus-over-diagram.png"),
+    animations: "disabled",
+  })
 })

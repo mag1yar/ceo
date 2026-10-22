@@ -46,6 +46,7 @@ function AgentFrame({
         nodeId={id}
         focused={focused}
         data-status={live.status}
+        data-focused={focused || undefined}
         style={focus?.size ?? NODE_SIZE[type]}
         className={cn(
           "group/agent relative flex flex-col bg-card text-card-foreground transition-[width,height,border-color] duration-(--duration-move) ease-(--ease-spring)",

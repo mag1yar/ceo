@@ -30,6 +30,30 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn e2e_window_matches_main_except_hiding_overrides() {
+        // Tauri replaces the whole windows array on merge, so the e2e copy must be kept in sync by hand.
+        let main: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let e2e: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.e2e.conf.json")).unwrap();
+        let mut main = main["app"]["windows"][0].as_object().unwrap().clone();
+        let mut e2e = e2e["app"]["windows"][0].as_object().unwrap().clone();
+        for key in [
+            "x",
+            "y",
+            "focus",
+            "visible",
+            "incognito",
+            "preventOverflow",
+            "decorations",
+        ] {
+            main.remove(key);
+            e2e.remove(key);
+        }
+        assert_eq!(main, e2e);
+    }
+
+    #[test]
     fn main_window_is_ceo_with_min_size() {
         let conf: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();

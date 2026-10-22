@@ -7,11 +7,11 @@
     "dev": "tauri dev",
     "vite": "vite",
     "check": "biome check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.wdio.json",
     "clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:e2e": "playwright test",
-    "test:e2e:app": "tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts"
+    "test:e2e:app": "CARGO_TARGET_DIR=target/e2e tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

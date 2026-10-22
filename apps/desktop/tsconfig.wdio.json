@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["e2e/app", "e2e/port.ts", "wdio.conf.ts"],
+  "exclude": []
+}

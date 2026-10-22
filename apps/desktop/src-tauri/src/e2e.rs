@@ -42,7 +42,6 @@ fn keep_painting(wk_webview: *mut std::ffi::c_void) {
     };
     let sel = sel!(_setWindowOcclusionDetectionEnabled:);
     let supported: bool = unsafe { msg_send![view, respondsToSelector: sel] };
-    println!("e2e: _setWindowOcclusionDetectionEnabled supported={supported}");
     if supported {
         let _: () = unsafe { msg_send![view, _setWindowOcclusionDetectionEnabled: Bool::NO] };
     }

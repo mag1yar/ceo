@@ -12,20 +12,27 @@ function project(id: string) {
 }
 
 function board(projectId: string) {
-  const b = boards.get(projectId) ?? { viewport: {}, nodes: [], edges: [] }
-  boards.set(projectId, b)
-  return b
+  return boards.get(projectId) ?? { viewport: {}, nodes: [], edges: [] }
 }
 
+const byId = (x: { id: string }, y: { id: string }) =>
+  x.id < y.id ? -1 : x.id > y.id ? 1 : 0
+
 mockWindows("main")
-mockIPC((cmd, payload) => {
+// Copies, like real IPC: callers must never hold references into the mock store.
+mockIPC((cmd, payload) => structuredClone(handle(cmd, payload)))
+
+// Mirrors the Rust store's ordering and errors so headless specs see what the real app does.
+function handle(cmd: string, payload: unknown) {
   const a = (payload ?? {}) as Record<string, string> & {
     ids: string[]
     changes: Partial<BoardChanges>
   }
   switch (cmd) {
     case "project_list":
-      return [...projects].sort((x, y) => x.position - y.position)
+      return [...projects].sort(
+        (x, y) => x.position - y.position || x.createdAt - y.createdAt
+      )
     case "project_create": {
       const p: Project = {
         id: crypto.randomUUID(),
@@ -42,20 +49,35 @@ mockIPC((cmd, payload) => {
       return Object.assign(project(a.id), { name: a.name, path: a.path })
     case "project_touch":
       return Object.assign(project(a.id), { lastOpenedAt: Date.now() })
-    case "project_delete":
-      projects.splice(projects.indexOf(project(a.id)), 1)
+    case "project_delete": {
+      const i = projects.findIndex((p) => p.id === a.id)
+      if (i >= 0) projects.splice(i, 1)
       boards.delete(a.id)
       return null
+    }
     case "project_reorder":
       a.ids.forEach((id, i) => {
-        project(id).position = i
+        const p = projects.find((p) => p.id === id)
+        if (p) p.position = i
       })
       return null
-    case "board_load":
-      return board(a.projectId)
-    case "board_save": {
+    case "board_load": {
       const b = board(a.projectId)
+      return {
+        ...b,
+        nodes: [...b.nodes].sort((x, y) => x.z - y.z || byId(x, y)),
+        edges: [...b.edges].sort(byId),
+      }
+    }
+    case "board_save": {
       const c = a.changes
+      // Validate before mutating: the Rust batch is one transaction.
+      if (!projects.some((p) => p.id === a.projectId))
+        throw "FOREIGN KEY constraint failed"
+      if (c.upsertNodes?.some((n) => n.type === ""))
+        throw "CHECK constraint failed: type <> ''"
+      const b = board(a.projectId)
+      boards.set(a.projectId, b)
       if (c.viewport) b.viewport = c.viewport
       const gone = new Set(c.deleteNodeIds)
       b.nodes = b.nodes.filter((n) => !gone.has(n.id))
@@ -74,4 +96,4 @@ mockIPC((cmd, payload) => {
     default:
       throw `mock-ipc: no handler for ${cmd}`
   }
-})
+}

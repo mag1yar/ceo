@@ -1,11 +1,15 @@
 /// <reference types="@wdio/globals/types" />
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { worktreePort } from "./e2e/port"
 
 // Throwaway HOME per run puts app_data_dir (ceo.db) there; WebKit storage is in memory via `incognito`.
-process.env.CEO_E2E_HOME ??= mkdtempSync(join(tmpdir(), "ceo-e2e-"))
+// This file also loads in each worker: only the launcher makes a fresh dir, workers inherit it.
+const home = process.env.WDIO_WORKER_ID
+  ? (process.env.CEO_E2E_HOME ?? "")
+  : mkdtempSync(join(tmpdir(), "ceo-e2e-"))
+process.env.CEO_E2E_HOME = home
 const port = Number(process.env.TAURI_WEBDRIVER_PORT) || worktreePort(4445)
 
 export const config: WebdriverIO.Config = {
@@ -15,7 +19,8 @@ export const config: WebdriverIO.Config = {
   capabilities: [
     {
       browserName: "tauri",
-      "tauri:options": { application: "src-tauri/target/debug/ceo" },
+      // Separate target dir (relative to src-tauri, where cargo runs) so e2e builds never overwrite the dev binary.
+      "tauri:options": { application: "src-tauri/target/e2e/debug/ceo" },
     } as WebdriverIO.Capabilities,
   ],
   services: [
@@ -32,6 +37,7 @@ export const config: WebdriverIO.Config = {
   // An explicit switch stops the service probing window focus through tauri-plugin-wdio, which we do not ship.
   before: async (_caps, _specs, browser) =>
     browser.switchToWindow(await browser.getWindowHandle()),
+  onComplete: () => rmSync(home, { recursive: true, force: true }),
   framework: "mocha",
   reporters: ["spec"],
   logLevel: "warn",

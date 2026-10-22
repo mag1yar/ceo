@@ -1,22 +1,25 @@
 # CEO - concept
 
-Status: agreed direction, 2026-10-22. Not yet planned or implemented.
+Status: agreed direction, 2026-10-22. Desktop UI built (waves 1-7); engine planned in waves 8-10 (`waves.md`).
 
-A desktop workspace where the owner talks to one long-lived CEO agent per project. The CEO turns tracker tasks into ordered waves, hands them to Lead sessions, and reports back. Every agent is a visible terminal session on a Miro-like canvas.
+A desktop workspace where the owner talks to one long-lived CEO agent per project. The owner only gives the CEO tasks; the CEO does everything else: plans, builds the team, runs each execution in its own worktree, merges, and reports back. Every agent is a visible terminal session on a Miro-like canvas. Our own product, built clean-room from reference patterns and best practice, not on top of an existing orchestrator.
 
 ## Hierarchy
 
 - **CEO** - one per project, long-lived, talks to the owner. Never does task work itself. Needs durable memory that survives `/clear` and compaction (see Open research).
-- **Lead** - one per wave or task group. Receives tasks from the CEO, splits them inside its team, answers team questions, escalates to the CEO what it cannot answer, merges team work, reports back. Other Lead kinds (research, UI review) come later as profiles, not now.
-- **Member** - executes one task. Talks only to its Lead and its teammates.
+- **Team shape is the CEO's call per request.** One task: the CEO spawns one executor (a Member) directly, no Lead. Several tasks or a wave: the CEO spawns a Lead, which distributes them to its own members and runs them in parallel.
+- **Lead** - one per wave or task group, only when there is more than one task. Receives tasks from the CEO, splits them inside its team, answers team questions, escalates to the CEO what it cannot answer, merges team work, reports back. Other Lead kinds (research, UI review) come later as profiles, not now.
+- **Member** - executes one task. Talks only to its Lead and its teammates, or only to the CEO when the CEO spawned it directly.
 
-Allowed links: CEO <-> Lead, Lead <-> Lead, Member <-> own Lead, Member <-> own teammates. Members never reach the CEO or other Leads; this is enforced by which bus tools each session gets, not by prompt.
+Allowed links: CEO <-> Lead, CEO <-> own executor, Lead <-> Lead, Member <-> own Lead, Member <-> own teammates. Members never reach the CEO or other Leads; this is enforced by which bus tools each session gets, not by prompt.
 
 No functional roles (frontend/backend). A member is a clean session plus a brief plus a profile (model, effort, permissions, acceptance check). Models: Claude 5.5 family only, Haiku to Opus.
 
 ## Hard rules
 
 - **No subagents, no Workflow.** Every agent is a visible `claude` process the owner can open, type into, interrupt or stop at any time. Enforced with `permissions.deny: ["Agent", "Workflow"]` in the settings the app passes to each session.
+- **Always autonomous.** Every session runs without permission prompts. Guardrails live in the settings the app passes to each session: deny `Agent`, `Workflow`, `git push` and force operations; work stays inside the session's own worktree.
+- **Every execution in its own worktree.** A single-task executor branches off the integration branch.
 - **Two-level isolation.** Lead works in its own worktree and branch off the integration branch; each member works in its own worktree and branch off the Lead branch. Merges go up: member -> Lead -> CEO, with the project gate run at each level.
 - **Nothing reaches main without the owner's yes**, in every mode.
 
@@ -42,6 +45,7 @@ Every wave ends with a report note: what was done per task, which checks passed,
 
 ## Canvas
 
+- **Messages are visible.** A message travels as a signal along the edge between sender and receiver, stops and waits at the receiver until accepted, then disappears into the node. Accepted means the receiver explicitly took it (a bus call), not that it reached the process.
 - Free graph: CEO in the centre, Leads around it, members around their Lead. Edges show who talks to whom.
 - Terminals open on click (all-open is too heavy for the webview). Unopened nodes show status and last output lines.
 - **Notes are memory.** A note linked to an agent is loaded into that agent at session start. The CEO prepares a note before creating a Lead; the Lead prepares notes for its members; members do not create notes. A Lead's note is cleaned up when the Lead is removed. Notes have priority and a size budget; the CEO consolidates them.
@@ -61,6 +65,8 @@ The app assigns each worktree a port range through `PORT`, and detects listening
 - Other terminal agents (Codex, OpenCode) later; the contract is the bus MCP, no adapter layer until a second agent exists.
 
 ## Open research
+
+Findings so far: `docs/research/tokens.md` (questions 1 and 3; the cache hypothesis holds) and `docs/research/bus.md` (bus, delivery, sessions).
 
 1. **CEO memory and token economy.** What the CEO keeps, where, what loads at start, how it survives `/clear` and compaction, how notes are consolidated, measured token cost. Sources: refs corpus (mem0, hindsight, supermemory, memoripy, TencentDB-Agent-Memory, letta-code, fast-jev-compaction, headroom, cloudflare-os compaction) plus Claude Code memory, `PreCompact`/`SessionStart` hooks, CLAUDE.md.
 2. **CEO learning by prompt edits** (harness2 in refs): size cap, consolidation, every edit a revertible commit, owner approval or auto-apply with a log.

@@ -11,6 +11,9 @@ const BOUND: Duration = Duration::from_millis(1500);
 static APP: OnceLock<AppHandle> = OnceLock::new();
 static ASKED: AtomicBool = AtomicBool::new(false);
 static DONE: AtomicBool = AtomicBool::new(false);
+// AppKit is waiting on NSTerminateLater; answer it instead of exiting ourselves.
+#[cfg(target_os = "macos")]
+static LATER: AtomicBool = AtomicBool::new(false);
 static CODE: AtomicI32 = AtomicI32::new(0);
 
 pub fn on_event(app: &AppHandle, event: &RunEvent) {
@@ -35,26 +38,50 @@ pub fn on_event(app: &AppHandle, event: &RunEvent) {
                 return;
             }
             api.prevent_exit();
-            if ASKED.swap(true, SeqCst) {
-                return;
-            }
-            CODE.store(code.unwrap_or(0), SeqCst);
-            if app.emit("app://flush", ()).is_err() {
-                return finish(app);
-            }
-            let app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(BOUND);
-                finish(&app);
-            });
+            ask(app, code.unwrap_or(0));
         }
         _ => {}
     }
 }
 
+// Asks the webview to flush once; its answer or the bound calls `finish`.
+fn ask(app: &AppHandle, code: i32) {
+    if ASKED.swap(true, SeqCst) {
+        return;
+    }
+    CODE.store(code, SeqCst);
+    if app.emit("app://flush", ()).is_err() {
+        return finish(app);
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(BOUND);
+        finish(&app);
+    });
+}
+
 fn finish(app: &AppHandle) {
-    if !DONE.swap(true, SeqCst) {
-        app.exit(CODE.load(SeqCst));
+    if DONE.swap(true, SeqCst) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if LATER.load(SeqCst) {
+        // Queued, so it also lands after applicationShouldTerminate: has returned Later.
+        let _ = app.run_on_main_thread(reply_terminate);
+        return;
+    }
+    app.exit(CODE.load(SeqCst));
+}
+
+// Lets the held terminate: go on; AppKit then sends applicationWillTerminate:, which tao turns into RunEvent::Exit.
+#[cfg(target_os = "macos")]
+fn reply_terminate() {
+    use objc2::runtime::{AnyObject, Bool};
+    use objc2::{class, msg_send};
+    // SAFETY: run on the main thread while AppKit waits for this reply.
+    unsafe {
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, replyToApplicationShouldTerminate: Bool::YES];
     }
 }
 
@@ -64,7 +91,7 @@ pub fn app_flush_done(app: AppHandle) {
     finish(&app);
 }
 
-// The Quit item (Cmd+Q, Dock, logout) sends terminate:, which tao lets through with no ExitRequested; turn it into one.
+// The Quit item (Cmd+Q, Dock, logout) sends terminate:, which tao lets through with no ExitRequested; hold it until the flush.
 #[cfg(target_os = "macos")]
 fn hook_terminate() {
     use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
@@ -72,11 +99,13 @@ fn hook_terminate() {
 
     extern "C-unwind" fn should_terminate(_: *mut AnyObject, _: Sel, _: *mut AnyObject) -> usize {
         const NOW: usize = 1;
-        const CANCEL: usize = 0;
+        // Not Cancel: that would abort a logout or shutdown.
+        const LATER_REPLY: usize = 2;
         match APP.get() {
             Some(app) if !DONE.load(SeqCst) => {
-                app.exit(0);
-                CANCEL
+                LATER.store(true, SeqCst);
+                ask(app, 0);
+                LATER_REPLY
             }
             _ => NOW,
         }

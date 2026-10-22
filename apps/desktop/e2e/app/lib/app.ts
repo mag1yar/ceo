@@ -7,6 +7,15 @@ const appPid = () =>
     execSync(`lsof -ti tcp:${browser.options.port} -sTCP:LISTEN`).toString()
   )
 
+export const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 let relaunched: ChildProcess | undefined
 // The next worker relaunches the app it finds dead.
 process.once("exit", () => relaunched?.kill())
@@ -22,14 +31,7 @@ export async function restartApp(
   if (seen) throw new Error(`CSP violations: ${seen}`)
   const old = appPid()
   await quit(old)
-  await browser.waitUntil(() => {
-    try {
-      process.kill(old, 0)
-      return false
-    } catch {
-      return true
-    }
-  })
+  await browser.waitUntil(() => !alive(old))
   relaunched = spawn("src-tauri/target/e2e/debug/ceo", [], {
     env: {
       ...process.env,

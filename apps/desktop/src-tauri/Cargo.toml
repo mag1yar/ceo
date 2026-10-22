@@ -18,7 +18,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 ts-rs = "12"
 tauri-plugin-wdio-webdriver = { version = "1.5", optional = true }
-objc2 = "0.6"
 objc2-app-kit = { version = "0.3", optional = true, features = ["NSApplication", "NSEvent", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSResponder", "NSWindow"] }
 objc2-foundation = { version = "0.3", optional = true, features = ["NSArray", "NSGeometry", "NSString"] }
 tauri-plugin-dialog = "2"
@@ -27,6 +26,9 @@ portable-pty = "0.9"
 [dev-dependencies]
 tempfile = "3"
 tauri = { version = "2.12.5", features = ["macos-private-api", "test"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
 
 [features]
 # Hidden, WebDriver-driven test build; never enabled by `pnpm dev` or release builds.

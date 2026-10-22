@@ -10,7 +10,7 @@ export type LinkData = {
 }
 export type LinkEdge = Edge<LinkData, "link">
 
-export function newLink(c: Connection): LinkEdge {
+export function newLink(c: Connection): Edge {
   return toEdge({
     id: crypto.randomUUID(),
     source: c.source,
@@ -23,11 +23,12 @@ export function newLink(c: Connection): LinkEdge {
   })
 }
 
-export function toEdge(e: BoardEdge): LinkEdge {
+export function toEdge(e: BoardEdge): Edge {
   const data = (e.data ?? { kind: "link" }) as LinkData
   return {
     id: e.id,
-    type: "link",
+    // Only user links get the arrow and label; other kinds (agent hierarchy) are plain lines.
+    type: data.kind === "link" ? "link" : "straight",
     source: e.source,
     target: e.target,
     sourceHandle: data.sourceHandle,

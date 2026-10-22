@@ -27,6 +27,8 @@ import {
   useRef,
   useState,
 } from "react"
+import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
+import { useIsValidConnection } from "@/features/agents/canConnect"
 import {
   type BoardChanges,
   type Board as BoardData,
@@ -92,6 +94,7 @@ function Canvas({
   const [viewport] = useState(() => asViewport(initial.viewport))
   const rf = useReactFlow()
   const flow = useStoreApi()
+  const isValidConnection = useIsValidConnection()
 
   // Last persisted state; a flush sends only what differs from it.
   const saved = useRef({
@@ -289,6 +292,7 @@ function Canvas({
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onDoubleClick={onDoubleClick}
+      isValidConnection={isValidConnection}
       defaultViewport={viewport}
       fitView={!viewport}
       minZoom={0.1}
@@ -308,6 +312,8 @@ function Canvas({
       <DotGrid />
       <ZoomControls />
       <BoardToolbar onAddNote={addNoteAtCenter} />
+      <AgentInspector />
+      {import.meta.env.DEV && <SeedTeam projectId={projectId} />}
     </ReactFlow>
   )
 }

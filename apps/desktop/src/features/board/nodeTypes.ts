@@ -1,4 +1,5 @@
 import type { NodeTypes } from "@xyflow/react"
+import { CeoNode, LeadNode, MemberNode } from "@/features/agents/AgentNode"
 import { CardNodeView } from "./CardNode"
 import { NoteNodeView } from "./NoteNode"
 
@@ -6,4 +7,7 @@ import { NoteNodeView } from "./NoteNode"
 export const nodeTypes = {
   card: CardNodeView,
   note: NoteNodeView,
+  ceo: CeoNode,
+  lead: LeadNode,
+  member: MemberNode,
 } satisfies NodeTypes

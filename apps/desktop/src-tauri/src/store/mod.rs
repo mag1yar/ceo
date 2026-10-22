@@ -1,3 +1,4 @@
+mod messages;
 mod migrations;
 mod types;
 
@@ -274,12 +275,12 @@ impl Store {
             .execute(
                 &format!(
                     "INSERT INTO sessions (id, project_id, node_id, role, repo, worktree, branch, tmux_name,
-                       claude_session_id, token, status, action, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, {NOW_MS}, {NOW_MS})"
+                       claude_session_id, token, status, action, parent, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, {NOW_MS}, {NOW_MS})"
                 ),
                 params![
                     s.id, s.project_id, s.node_id, s.role, s.repo, s.worktree, s.branch, s.tmux_name,
-                    s.claude_session_id, s.token, s.status, s.action
+                    s.claude_session_id, s.token, s.status, s.action, s.parent
                 ],
             )
             .map_err(err)?;
@@ -311,7 +312,7 @@ impl Store {
     }
 }
 
-const SESSION_COLS: &str = "id, project_id, node_id, role, repo, worktree, branch, tmux_name, claude_session_id, token, status, action";
+const SESSION_COLS: &str = "id, project_id, node_id, role, repo, worktree, branch, tmux_name, claude_session_id, token, status, action, parent";
 
 fn session_row(r: &rusqlite::Row) -> rusqlite::Result<AgentSession> {
     Ok(AgentSession {
@@ -327,6 +328,7 @@ fn session_row(r: &rusqlite::Row) -> rusqlite::Result<AgentSession> {
         token: r.get(9)?,
         status: r.get(10)?,
         action: r.get(11)?,
+        parent: r.get(12)?,
     })
 }
 
@@ -388,6 +390,10 @@ pub fn project_reorder(s: State<Store>, ids: Vec<String>) -> Res<()> {
 #[tauri::command(async)]
 pub fn board_load(s: State<Store>, project_id: String) -> Res<Board> {
     s.load_board(&project_id)
+}
+#[tauri::command(async)]
+pub fn message_list(s: State<Store>, project_id: String) -> Res<Vec<Message>> {
+    s.list_messages(&project_id)
 }
 #[tauri::command(async)]
 pub fn board_save(s: State<Store>, project_id: String, changes: BoardChanges) -> Res<()> {

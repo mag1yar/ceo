@@ -81,4 +81,26 @@ pub struct AgentSession {
     pub token: String,
     pub status: String,
     pub action: String,
+    /// The node that spawned this session: an executor's CEO.
+    pub parent: Option<String>,
+}
+
+/// One bus message; serialises to the `Message` contract in `src/features/messages/messages.ts`.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Message {
+    pub id: String,
+    pub project_id: String,
+    pub from: String,
+    pub to: String,
+    pub thread: String,
+    pub kind: String,
+    pub body: String,
+    pub state: String,
+    pub delivered_via: Option<String>,
+    pub sent_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<i64>,
 }

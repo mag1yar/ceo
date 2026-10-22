@@ -17,4 +17,12 @@ export type BoardChanges = { viewport: unknown | null, upsertNodes: Array<BoardN
 
  */
 
-export type AgentSession = { id: string, projectId: string, nodeId: string, role: string, repo: string, worktree: string | null, branch: string | null, tmuxName: string, claudeSessionId: string, status: string, action: string, };
+export type AgentSession = { id: string, projectId: string, nodeId: string, role: string, repo: string, worktree: string | null, branch: string | null, tmuxName: string, claudeSessionId: string, status: string, action: string, 
+
+/**
+
+ * The node that spawned this session: an executor's CEO.
+
+ */
+
+parent: string | null, };

@@ -1,11 +1,14 @@
 //! Agent sessions: `claude` in tmux on our own socket, one git worktree each, status from Claude Code hooks.
 
+mod bus;
+mod guard;
 mod hooks;
+pub mod shim;
 mod tmux;
 mod worktree;
 
 use crate::store::{AgentSession, Store};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -43,6 +46,9 @@ pub struct Sessions {
     // Serialises start and removal, so a node mount and the startup reconcile never race on one session.
     ops: Mutex<()>,
     heard: Mutex<HashMap<String, Instant>>,
+    // Sessions a pointer is being typed into, so two deliveries never type at once.
+    nudging: Mutex<HashSet<String>>,
+    ask_wait: Duration,
 }
 
 #[cfg(not(feature = "e2e"))]
@@ -186,16 +192,23 @@ impl Sessions {
         self.heard.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    fn nudging(&self) -> std::sync::MutexGuard<'_, HashSet<String>> {
+        self.nudging.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn session_dir(&self, id: &str) -> PathBuf {
         self.dir.join("sessions").join(id)
     }
 
+    /// A session row and its worktree: off the repo's HEAD, or off the parent's branch HEAD for a spawned one.
     fn create(
         &self,
         store: &Store,
         project_id: &str,
         node_id: &str,
         role: &str,
+        parent: Option<&AgentSession>,
+        stem: &str,
     ) -> Res<AgentSession> {
         let repo = store
             .list_projects()?
@@ -206,11 +219,15 @@ impl Sessions {
         let id = uuid();
         let short = &id[..8];
         // A non-git project runs the session in the project folder itself.
-        let (worktree, branch) = match worktree::head(&repo) {
+        let base = match parent {
+            Some(p) => p.worktree.as_deref().and_then(worktree::head),
+            None => worktree::head(&repo),
+        };
+        let (worktree, branch) = match base {
             Some(base) => {
                 let path = self.dir.join("worktrees").join(project_id).join(&id);
                 let path = path.to_string_lossy().into_owned();
-                let branch = format!("ceo/{role}-{short}");
+                let branch = format!("ceo/{stem}-{short}");
                 worktree::add(&repo, &path, &branch, &base)?;
                 (Some(path), Some(branch))
             }
@@ -229,6 +246,7 @@ impl Sessions {
             token: hex(&random_bytes::<32>()),
             status: "idle".into(),
             action: "Starting".into(),
+            parent: parent.map(|p| p.node_id.clone()),
         };
         if let Err(e) = store.insert_session(&row) {
             // No row would ever track this worktree, so take it back now (still without force).
@@ -250,6 +268,27 @@ impl Sessions {
         std::fs::write(&settings, hooks::settings(&url, &row.token).to_string())
             .map_err(|e| e.to_string())?;
         let settings = settings.to_string_lossy();
+        // The bus as an MCP server: this binary in shim mode, with the session's own URL and token.
+        let mcp = dir.join("mcp.json");
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let config = serde_json::json!({ "mcpServers": { "ceo": {
+            "type": "stdio",
+            "command": exe,
+            "args": ["mcp-shim"],
+            "env": {
+                "CEO_BUS_URL": format!("http://127.0.0.1:{}/bus/{}", self.port, row.id),
+                "CEO_BUS_TOKEN": row.token,
+            },
+            // Per-server, so an owner's low MCP_TOOL_TIMEOUT never cuts a blocking ask short.
+            "timeout": (self.ask_wait + Duration::from_secs(60)).as_millis() as u64,
+        } } });
+        std::fs::write(&mcp, config.to_string()).map_err(|e| e.to_string())?;
+        let mcp = mcp.to_string_lossy();
+        // An executor's brief, model and effort, written by spawn_executor.
+        let profile: serde_json::Value = std::fs::read_to_string(dir.join("profile.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
         // A project at a subfolder of its repo runs claude at the same subfolder of the worktree.
         let cwd = match &row.worktree {
             Some(wt) => Path::new(wt).join(worktree::prefix(&row.repo)),
@@ -260,25 +299,43 @@ impl Sessions {
         if std::env::var_os("LANG").is_none() {
             env.push(("LANG", "en_US.UTF-8"));
         }
-        self.tmux()?.start(
-            &row.tmux_name,
-            &cwd,
-            size,
-            &env,
-            &[
-                &bins.claude,
-                "--dangerously-skip-permissions",
-                "--settings",
-                &settings,
-                mode,
-                &row.claude_session_id,
-            ],
-        )
+        let mut argv = vec![
+            bins.claude.as_str(),
+            "--dangerously-skip-permissions",
+            "--settings",
+            &settings,
+            mode,
+            &row.claude_session_id,
+            // Not the last option: --mcp-config takes several values and would swallow the prompt.
+            "--mcp-config",
+            &mcp,
+            "--append-system-prompt",
+            bus::role_prompt(&row.role),
+        ];
+        for flag in ["model", "effort"] {
+            if let Some(v) = profile[flag].as_str() {
+                argv.extend([
+                    if flag == "model" {
+                        "--model"
+                    } else {
+                        "--effort"
+                    },
+                    v,
+                ]);
+            }
+        }
+        // The brief starts a fresh session only; a resumed one already has it.
+        if let Some(brief) = profile["brief"].as_str().filter(|_| mode == "--session-id") {
+            argv.extend(["--", brief]);
+        }
+        self.tmux()?.start(&row.tmux_name, &cwd, size, &env, &argv)
     }
 
     /// Runs claude for a row whose tmux session is gone: resume, else a fresh start under the same id.
-    fn restart(&self, row: &AgentSession, size: (u16, u16)) -> Res<()> {
+    fn restart(&self, store: &Store, row: &AgentSession, size: (u16, u16)) -> Res<()> {
         let tmux = self.tmux()?;
+        // Nothing is typed into it until its SessionStart says the prompt is up.
+        store.set_session_status(&row.id, "idle", "Starting")?;
         // Only a session that got a prompt has a transcript; --resume of any other exits at once.
         for mode in ["--resume", "--session-id"] {
             let _ = self.launch(row, size, mode);
@@ -298,6 +355,7 @@ impl Sessions {
         if let Ok(tmux) = self.tmux() {
             let _ = tmux.kill(&row.tmux_name);
         }
+        // `branch -d` keeps a branch with unmerged commits, so an executor's work stays for the owner to merge.
         let kept = match (&row.worktree, &row.branch) {
             (Some(path), Some(branch)) => worktree::remove(&row.repo, path, branch).err(),
             _ => None,
@@ -351,39 +409,122 @@ fn reconcile<'a>(
     (dead, orphans)
 }
 
-fn on_hook<R: Runtime>(app: &AppHandle<R>, id: &str, auth: Option<&str>, body: &[u8]) -> u16 {
-    let store = app.state::<Store>();
-    let Ok(Some(row)) = store.session(id) else {
-        return 401;
+/// `/hook/<session>` for Claude Code hooks, `/bus/<session>/tools` and `/bus/<session>/call` for the MCP shim.
+fn on_request<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &str,
+    auth: Option<&str>,
+    body: &[u8],
+) -> (u16, String) {
+    let (id, route) = match path.strip_prefix("/hook/") {
+        Some(id) => (id, "hook"),
+        None => match path.strip_prefix("/bus/").and_then(|p| p.split_once('/')) {
+            Some((id, route @ ("tools" | "call"))) => (id, route),
+            _ => return (404, String::new()),
+        },
+    };
+    if id.is_empty() || id.contains('/') {
+        return (404, String::new());
+    }
+    let Ok(Some(row)) = app.state::<Store>().session(id) else {
+        return (401, String::new());
     };
     if !hooks::token_ok(&row.token, auth) {
-        return 401;
+        return (401, String::new());
     }
-    let Ok(event) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return 400;
+    let Ok(body) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (400, String::new());
     };
+    match route {
+        "hook" => (200, on_hook(app, &row, &body)),
+        "tools" => (200, bus::tools(&row.role).to_string()),
+        _ => (200, bus::call(app, &row, &body).to_string()),
+    }
+}
+
+/// Moves the node status, and answers with the push guard's deny or with messages for a busy agent.
+fn on_hook<R: Runtime>(
+    app: &AppHandle<R>,
+    row: &AgentSession,
+    event: &serde_json::Value,
+) -> String {
     app.state::<Sessions>()
         .heard()
         .insert(row.id.clone(), Instant::now());
-    if let Some((status, action)) = hooks::status_for(&event) {
+    let name = event["hook_event_name"].as_str().unwrap_or("");
+    let mut status = hooks::status_for(event);
+    let answer = match name {
+        "PreToolUse" if event["tool_name"] == "Bash" => event["tool_input"]["command"]
+            .as_str()
+            .and_then(guard::deny)
+            .map(|why| {
+                serde_json::json!({ "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": why,
+                } })
+            }),
+        "PostToolUse" => {
+            if event["tool_name"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("mcp__ceo__"))
+            {
+                bus::delivered_in(app, row, &event["tool_response"]);
+            }
+            bus::deliver_by_hook(app, row, "post_tool_use")
+        }
+        .map(|text| {
+            serde_json::json!({ "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": text,
+            } })
+        }),
+        // Blocks once per stop: while stop_hook_active the turn ends, which keeps us under Claude Code's block cap.
+        "Stop" if event["stop_hook_active"] != true => {
+            bus::deliver_by_hook(app, row, "stop").map(|text| {
+                status = Some(("working", "Reading messages".into()));
+                serde_json::json!({ "decision": "block", "reason": text })
+            })
+        }
+        _ => None,
+    };
+    if let Some((status, action)) = status {
         report(app, &row.project_id, &row.node_id, status, &action);
     }
-    200
+    // Messages that came in while the turn was ending go in once the pane is idle.
+    if name == "Stop" && answer.is_none() {
+        bus::nudge(app, row.clone());
+    }
+    answer.map(|a| a.to_string()).unwrap_or_default()
 }
 
 fn watchdog<R: Runtime>(app: AppHandle<R>) {
     let since = Instant::now();
     loop {
         std::thread::sleep(Duration::from_secs(5));
-        let (s, store) = (app.state::<Sessions>(), app.state::<Store>());
-        let (Ok(tmux), Ok(rows)) = (s.tmux(), store.live_sessions()) else {
-            continue;
-        };
-        for row in rows.iter().filter(|r| r.status == "working") {
-            let last = s.heard().get(&row.id).copied().unwrap_or(since);
-            if hooks::missed_stop(&row.status, last.elapsed(), &tmux.capture(&row.tmux_name)) {
-                report(&app, &row.project_id, &row.node_id, "idle", "Interrupted");
-            }
+        tick(&app, since);
+    }
+}
+
+/// One watchdog pass: idles a session whose Stop never came, and re-delivers to idle ones, also what was stored before a restart.
+fn tick<R: Runtime>(app: &AppHandle<R>, since: Instant) {
+    let (s, store) = (app.state::<Sessions>(), app.state::<Store>());
+    let (Ok(tmux), Ok(rows)) = (s.tmux(), store.live_sessions()) else {
+        return;
+    };
+    for row in &rows {
+        let last = s.heard().get(&row.id).copied().unwrap_or(since);
+        if row.status == "working"
+            && hooks::missed_stop(&row.status, last.elapsed(), &tmux.capture(&row.tmux_name))
+        {
+            report(app, &row.project_id, &row.node_id, "idle", "Interrupted");
+        }
+        if row.status == "idle"
+            && store
+                .undelivered(&row.project_id, &row.node_id)
+                .is_ok_and(|l| !l.is_empty())
+        {
+            bus::nudge(app, row.clone());
         }
     }
 }
@@ -395,7 +536,7 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     hooks::serve(
         listener,
-        Arc::new(move |id, auth, body| on_hook(&handle, id, auth, body)),
+        Arc::new(move |path, auth, body| on_request(&handle, path, auth, body)),
     );
     app.manage(Sessions {
         dir,
@@ -404,6 +545,8 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         bins: OnceLock::new(),
         ops: Mutex::default(),
         heard: Mutex::default(),
+        nudging: Mutex::default(),
+        ask_wait: bus::ASK_WAIT,
     });
     let handle = app.handle().clone();
     std::thread::spawn(move || {
@@ -420,7 +563,7 @@ pub fn init(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
         for row in dead {
             let _op = s.lock();
-            match s.restart(row, (220, 50)) {
+            match s.restart(&store, row, (220, 50)) {
                 Ok(()) => println!("sessions: restarted {}", row.tmux_name),
                 Err(e) => report(
                     &handle,
@@ -458,9 +601,11 @@ pub fn session_ensure<R: Runtime>(
     rows: u16,
 ) -> Res<Option<AgentSession>> {
     let store = app.state::<Store>();
-    // shortcut: only the CEO runs claude; Leads and Members stay shells until #19 spawns them.
-    if store.node_role(&project_id, &node_id)?.as_deref() != Some("ceo") {
-        return Ok(None);
+    // shortcut: the CEO starts its claude here and executors attach to theirs; Leads and Members stay shells.
+    match store.node_role(&project_id, &node_id)?.as_deref() {
+        Some("ceo") => {}
+        Some("executor") if store.node_session(&project_id, &node_id)?.is_some() => {}
+        _ => return Ok(None),
     }
     let s = app.state::<Sessions>();
     let ensure = || -> Res<AgentSession> {
@@ -469,11 +614,11 @@ pub fn session_ensure<R: Runtime>(
         let row = match store.node_session(&project_id, &node_id)? {
             Some(row) if tmux.has(&row.tmux_name) => return Ok(row),
             Some(row) => {
-                s.restart(&row, (cols, rows))?;
+                s.restart(&store, &row, (cols, rows))?;
                 row
             }
             None => {
-                let row = s.create(&store, &project_id, &node_id, "ceo")?;
+                let row = s.create(&store, &project_id, &node_id, "ceo", None, "ceo")?;
                 // The node switches off the mock pool now, not at the first hook (onboarding sends none).
                 report(&app, &project_id, &node_id, &row.status, &row.action);
                 s.launch(&row, (cols, rows), "--session-id")?;
@@ -497,8 +642,16 @@ pub fn session_delete<R: Runtime>(
 ) -> Res<()> {
     let store = app.state::<Store>();
     match store.node_session(&project_id, &node_id)? {
-        Some(row) => app.state::<Sessions>().remove(&store, &row),
-        None => Ok(()),
+        // Executors end through the bus (their report accepted, or stop); a node undone on the board comes back.
+        Some(row) if row.role != "executor" => {
+            for exec in store.project_sessions(&project_id)? {
+                if exec.parent.as_deref() == Some(&row.node_id) {
+                    bus::retire(&app, exec, false, "Its CEO was removed");
+                }
+            }
+            app.state::<Sessions>().remove(&store, &row)
+        }
+        _ => Ok(()),
     }
 }
 

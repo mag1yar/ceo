@@ -1,6 +1,7 @@
 import type { Node } from "@xyflow/react"
 
-export const ROLES = ["ceo", "lead", "member"] as const
+// An executor is spawned by the CEO through the bus (#19) and leaves the board once its report is accepted.
+export const ROLES = ["ceo", "lead", "member", "executor"] as const
 export type Role = (typeof ROLES)[number]
 export type Model = "haiku" | "sonnet" | "opus"
 
@@ -23,6 +24,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   ceo: "CEO",
   lead: "Lead",
   member: "Member",
+  executor: "Executor",
 }
 
 export const MODEL_LABEL: Record<Model, string> = {

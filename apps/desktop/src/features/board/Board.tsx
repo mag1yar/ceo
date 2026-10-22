@@ -30,6 +30,7 @@ import {
 import { AgentInspector, SeedTeam } from "@/features/agents/AgentPanels"
 import { AgentTerminals, focusedId } from "@/features/agents/AgentTerminals"
 import { useIsValidConnection } from "@/features/agents/canConnect"
+import { useSpawned } from "@/features/agents/useSpawned"
 import { useCommand } from "@/features/commands/registry"
 import { newDiagram } from "@/features/diagrams/diagram"
 import { DemoSignals } from "@/features/messages/DemoSignals"
@@ -108,6 +109,7 @@ function Canvas({
     edges: new Map(edges.map((e) => [e.id, toBoardEdge(e)])),
     viewport,
   })
+  useSpawned(projectId, nodes, edges, setNodes, setEdges, saved)
   const latest = useRef({ nodes, edges, viewport })
   const timer = useRef<number>(undefined)
   const closed = useRef(false)

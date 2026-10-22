@@ -19,6 +19,7 @@ fn app() -> (tempfile::TempDir, WebviewWindow<MockRuntime>) {
             project_reorder,
             board_load,
             board_save,
+            message_list,
         ])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -115,5 +116,24 @@ fn board_commands_over_ipc() {
     assert!(
         call(&w, "board_load", json!({})).is_err(),
         "missing projectId is rejected"
+    );
+}
+
+#[test]
+fn message_list_over_ipc_in_the_ts_contract_shape() {
+    let (_d, w) = app();
+    let p = call(&w, "project_create", json!({"name": "p", "path": "/tmp/p"})).unwrap();
+    let store = w.state::<Store>();
+    let id = p["id"].as_str().unwrap();
+    let m = store
+        .add_message(id, "a", "b", "report", "done", None)
+        .unwrap();
+    let list = call(&w, "message_list", json!({"projectId": id})).unwrap();
+    assert_eq!(
+        list,
+        json!([{
+            "id": m.id, "projectId": id, "from": "a", "to": "b", "thread": m.id, "kind": "report",
+            "body": "done", "state": "sent", "deliveredVia": null, "sentAt": m.sent_at,
+        }])
     );
 }

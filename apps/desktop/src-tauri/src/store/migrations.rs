@@ -56,6 +56,24 @@ CREATE TABLE sessions (
 );
 CREATE UNIQUE INDEX sessions_node ON sessions (project_id, node_id) WHERE removed_at IS NULL;
 ",
+    "
+ALTER TABLE sessions ADD COLUMN parent TEXT;
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    from_node TEXT NOT NULL,
+    to_node TEXT NOT NULL,
+    thread TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    body TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('sent', 'waiting', 'accepted')),
+    delivered_via TEXT CHECK (delivered_via IN ('typed', 'post_tool_use', 'stop')),
+    sent_at INTEGER NOT NULL,
+    waiting_at INTEGER,
+    accepted_at INTEGER
+);
+CREATE INDEX messages_to ON messages (project_id, to_node, state);
+",
 ];
 
 pub fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

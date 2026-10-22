@@ -8,6 +8,7 @@ export const NODE_SIZE: Record<Role, { width: number; height: number }> = {
   ceo: AGENT_SIZE,
   lead: AGENT_SIZE,
   member: AGENT_SIZE,
+  executor: AGENT_SIZE,
 }
 
 const LEAD_RADIUS = 800

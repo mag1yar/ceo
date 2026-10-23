@@ -109,37 +109,38 @@ describe("notes and links in the hidden app", () => {
     expect(b.edges[0].data).toMatchObject({ kind: "link" })
     expect(b.nodes.map((n) => n.width)).toEqual([220, 220])
     // The floating ends sit on each note's outline, on the side facing the other note.
-    const ends = await browser.execute(() => {
-      const path = document.querySelector(
-        ".react-flow__edge-path"
-      ) as SVGPathElement
-      const ctm = path.getScreenCTM() as DOMMatrix
-      const at = (l: number) => path.getPointAtLength(l).matrixTransform(ctm)
-      const edge = path.closest(".react-flow__edge") as Element
-      const label = edge.getAttribute("aria-label") as string
-      const rect = (id: string) =>
-        (
-          document.querySelector(
-            `.react-flow__node[data-id="${id}"]`
-          ) as Element
-        ).getBoundingClientRect()
-      const [, source, target] = label.match(/from (\S+) to (\S+)/) ?? []
-      const box = (r: DOMRect) => ({
-        x: r.x,
-        y: r.y,
-        right: r.right,
-        bottom: r.bottom,
-        cx: r.x + r.width / 2,
-        cy: r.y + r.height / 2,
-      })
-      const p = (q: DOMPoint) => ({ x: q.x, y: q.y })
-      return {
-        start: p(at(0)),
-        end: p(at(path.getTotalLength())),
-        source: box(rect(source)),
-        target: box(rect(target)),
-      }
-    })
+    const ends = await browser.execute(
+      (source, target) => {
+        const path = document.querySelector(
+          ".react-flow__edge-path"
+        ) as SVGPathElement
+        const ctm = path.getScreenCTM() as DOMMatrix
+        const at = (l: number) => path.getPointAtLength(l).matrixTransform(ctm)
+        const rect = (id: string) =>
+          (
+            document.querySelector(
+              `.react-flow__node[data-id="${id}"]`
+            ) as Element
+          ).getBoundingClientRect()
+        const box = (r: DOMRect) => ({
+          x: r.x,
+          y: r.y,
+          right: r.right,
+          bottom: r.bottom,
+          cx: r.x + r.width / 2,
+          cy: r.y + r.height / 2,
+        })
+        const p = (q: DOMPoint) => ({ x: q.x, y: q.y })
+        return {
+          start: p(at(0)),
+          end: p(at(path.getTotalLength())),
+          source: box(rect(source)),
+          target: box(rect(target)),
+        }
+      },
+      b.edges[0].source,
+      b.edges[0].target
+    )
     type B = typeof ends.source
     const onOutline = (q: { x: number; y: number }, r: B) =>
       [q.x - r.x, r.right - q.x, q.y - r.y, r.bottom - q.y].some(

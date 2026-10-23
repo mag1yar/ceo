@@ -169,7 +169,9 @@ test("connects from every side of a note and a diagram, drops anywhere, floats t
   // t1 sits right of s: the link leaves s's right side and enters t1's left side.
   const s = await box(page, nodeSel("s"))
   let t1 = await box(page, nodeSel("t1"))
-  const link = '[aria-label="Edge from s to t1"]'
+  const stored = (await ipc(page, "board_load", { projectId })) as Board
+  const st1 = stored.edges.find((x) => x.source === "s" && x.target === "t1")
+  const link = `.react-flow__edge[data-id="${st1?.id}"]`
   let e = await ends(page, link)
   near(e.start.x, s.x + s.width)
   near(e.end.x, t1.x)

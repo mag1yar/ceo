@@ -464,6 +464,27 @@ pub fn delivered_in<R: Runtime>(app: &AppHandle<R>, row: &AgentSession, result: 
 }
 
 /// Hands every undelivered message to the session through a hook answer; None when there is nothing.
+/// A spawned agent whose turn ends with no team left and no report yet is sent back to report: a model may just print its result.
+pub fn report_due<R: Runtime>(app: &AppHandle<R>, row: &AgentSession) -> Option<String> {
+    let store = app.state::<Store>();
+    if row.role == "ceo" || store.reported(&row.project_id, &row.node_id).ok()? {
+        return None;
+    }
+    let sessions = store.project_sessions(&row.project_id).ok()?;
+    if sessions
+        .iter()
+        .any(|c| c.parent.as_deref() == Some(&row.node_id))
+    {
+        return None;
+    }
+    Some(
+        "Your turn ended without mcp__ceo__report, so whoever spawned you never learns the result. \
+         If the task is done or you are blocked, call mcp__ceo__report now with the result and the acceptance \
+         check's output; if you are waiting for an answer to an ask, call that tool again with resume."
+            .into(),
+    )
+}
+
 pub fn deliver_by_hook<R: Runtime>(
     app: &AppHandle<R>,
     row: &AgentSession,

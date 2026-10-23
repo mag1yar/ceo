@@ -1953,3 +1953,52 @@ fn the_ceo_launches_with_its_profile_the_advice_and_no_idle_compaction() {
     assert_eq!(settings["idleCompaction"], false);
     s.remove(&store, &ceo).unwrap();
 }
+
+#[test]
+fn a_spawned_agent_that_stops_without_reporting_is_sent_back_once() {
+    let d = tempfile::tempdir().unwrap();
+    let app = mock_app(d.path(), Err("unused".into()), "unused");
+    let store = app.state::<Store>();
+    let p = store.create_project("p", "/tmp").unwrap();
+    let rows = [
+        session("ceo", &p.id, "ceo", None),
+        session("l1", &p.id, "lead", Some("ceo")),
+        session("a1", &p.id, "executor", Some("l1")),
+    ];
+    for r in &rows {
+        store.insert_session(r).unwrap();
+    }
+    let [ceo, l1, a1] = &rows;
+    let stop = |row: &AgentSession, active: bool| -> serde_json::Value {
+        let out = on_hook(
+            app.handle(),
+            row,
+            &json!({"hook_event_name": "Stop", "stop_hook_active": active}),
+        );
+        if out.is_empty() {
+            json!(null)
+        } else {
+            serde_json::from_str(&out).unwrap()
+        }
+    };
+    let told = stop(a1, false);
+    assert_eq!(told["decision"], "block");
+    assert!(
+        told["reason"]
+            .as_str()
+            .unwrap()
+            .contains("mcp__ceo__report")
+    );
+    assert_eq!(stop(a1, true), json!(null), "once per stop");
+    assert_eq!(
+        stop(l1, false),
+        json!(null),
+        "a Lead with a live team is waiting"
+    );
+    assert_eq!(stop(ceo, false), json!(null), "the CEO reports to nobody");
+    tool(&app, a1, "report", json!({"body": "done"})).unwrap();
+    // The report itself is a message for l1, so its Stop delivers that first.
+    let m = store.inbox(&p.id, "l1").unwrap();
+    store.accept_message(&m[0].id, "l1").unwrap();
+    assert_eq!(stop(a1, false), json!(null), "reported");
+}

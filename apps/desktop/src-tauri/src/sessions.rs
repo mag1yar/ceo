@@ -554,8 +554,12 @@ fn on_hook<R: Runtime>(
         }),
         // Blocks once per stop: while stop_hook_active the turn ends, which keeps us under Claude Code's block cap.
         "Stop" if event["stop_hook_active"] != true => {
-            bus::deliver_by_hook(app, row, "stop").map(|text| {
-                status = Some(("working", "Reading messages".into()));
+            let (text, action) = match bus::deliver_by_hook(app, row, "stop") {
+                Some(text) => (Some(text), "Reading messages"),
+                None => (bus::report_due(app, row), "Reporting"),
+            };
+            text.map(|text| {
+                status = Some(("working", action.into()));
                 serde_json::json!({ "decision": "block", "reason": text })
             })
         }

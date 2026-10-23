@@ -76,6 +76,15 @@ impl Store {
         )
     }
 
+    /// Whether the node has sent a report up yet.
+    pub fn reported(&self, project_id: &str, from: &str) -> Res<bool> {
+        let list = self.query_messages(
+            "project_id = ?1 AND from_node = ?2 AND kind = 'report'",
+            &[project_id, from],
+        )?;
+        Ok(!list.is_empty())
+    }
+
     /// Everything the node has not accepted yet.
     pub fn inbox(&self, project_id: &str, to: &str) -> Res<Vec<Message>> {
         self.query_messages(

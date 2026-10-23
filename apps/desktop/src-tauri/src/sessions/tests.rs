@@ -636,12 +636,13 @@ fn bus_tools_by_role_and_links_checked() {
 
     assert_eq!(
         names(bus::tools("executor")),
-        ["report", "ask", "inbox", "accept"]
+        ["report", "ask", "send", "inbox", "accept"]
     );
     assert_eq!(
         names(bus::tools("ceo")),
         [
             "spawn_executor",
+            "spawn_lead",
             "send",
             "interrupt",
             "stop",
@@ -651,7 +652,7 @@ fn bus_tools_by_role_and_links_checked() {
         ]
     );
     assert!(bus::linked(&ceo, &e1) && bus::linked(&e1, &ceo));
-    assert!(!bus::linked(&e1, &e2), "executor to executor");
+    assert!(bus::linked(&e1, &e2), "teammates");
     assert!(
         !bus::linked(&e3, &ceo) && !bus::linked(&ceo, &e3),
         "someone else's executor"
@@ -659,8 +660,8 @@ fn bus_tools_by_role_and_links_checked() {
     assert!(!bus::linked(&ceo, &boss));
 
     // An executor calling CEO tools, or messaging another executor.
-    let e = tool(&app, &e1, "send", json!({"to": "e2", "body": "hi"})).unwrap_err();
-    assert_eq!(e, "send is not a tool of the executor");
+    let e = tool(&app, &e1, "stop", json!({"to": "e2"})).unwrap_err();
+    assert_eq!(e, "stop is not a tool of the executor");
     assert!(
         tool(
             &app,
@@ -671,7 +672,7 @@ fn bus_tools_by_role_and_links_checked() {
         .is_err()
     );
     assert!(tool(&app, &e1, "reply", json!({"id": "x", "body": "b"})).is_err());
-    let e = bus::send(app.handle(), &e1, &e2, "send", "hi", None).unwrap_err();
+    let e = bus::send(app.handle(), &e1, &e3, "send", "hi", None).unwrap_err();
     assert!(e.contains("not linked"), "{e}");
     let e = tool(&app, &ceo, "send", json!({"to": "e3", "body": "hi"})).unwrap_err();
     assert!(e.contains("not linked"), "{e}");
@@ -968,7 +969,7 @@ fn shim_speaks_json_rpc_and_reaches_the_bus_again_after_a_restart() {
     send(json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"}));
     assert_eq!(
         names(answer(5)["result"].clone()),
-        ["report", "ask", "inbox", "accept"]
+        ["report", "ask", "send", "inbox", "accept"]
     );
     send(
         json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "report", "arguments": {"body": "done"}}}),
@@ -1225,4 +1226,348 @@ fn a_spawned_session_in_a_git_project_never_falls_back_to_the_project_folder() {
         )
         .unwrap();
     assert_eq!((row.worktree, row.branch), (None, None));
+}
+
+// Team per task (#20): links for every role pair, the files overlap rule, and a Lead retired after its team.
+
+#[test]
+fn team_links_for_every_role_pair() {
+    let d = tempfile::tempdir().unwrap();
+    let app = mock_app(d.path(), Err("unused".into()), "unused");
+    let store = app.state::<Store>();
+    let p = store.create_project("p", "/tmp").unwrap();
+    let all = [
+        session("ceo", &p.id, "ceo", None),
+        session("l1", &p.id, "lead", Some("ceo")),
+        session("l2", &p.id, "lead", Some("ceo")),
+        session("a1", &p.id, "executor", Some("l1")),
+        session("a2", &p.id, "executor", Some("l1")),
+        session("b1", &p.id, "executor", Some("l2")),
+        session("d1", &p.id, "executor", Some("ceo")),
+        session("d2", &p.id, "executor", Some("ceo")),
+        session("boss", &p.id, "ceo", None),
+        session("l3", &p.id, "lead", Some("boss")),
+    ];
+    for r in &all {
+        store.insert_session(r).unwrap();
+    }
+    let links = [
+        "ceo-l1", "ceo-l2", "ceo-d1", "ceo-d2", "l1-l2", "l1-a1", "l1-a2", "a1-a2", "l2-b1",
+        "d1-d2", "boss-l3",
+    ];
+    for a in &all {
+        for b in &all {
+            let want = [(a, b), (b, a)]
+                .iter()
+                .any(|(x, y)| links.contains(&format!("{}-{}", x.node_id, y.node_id).as_str()));
+            assert_eq!(bus::linked(a, b), want, "{} with {}", a.node_id, b.node_id);
+        }
+    }
+    let mut elsewhere = all[1].clone();
+    elsewhere.project_id = "q".into();
+    assert!(!bus::linked(&all[0], &elsewhere), "another project");
+
+    assert_eq!(
+        names(bus::tools("lead")),
+        [
+            "spawn_executor",
+            "send",
+            "interrupt",
+            "stop",
+            "reply",
+            "report",
+            "ask_ceo",
+            "inbox",
+            "accept"
+        ]
+    );
+    let spawn = &bus::tools("lead")["tools"][0]["inputSchema"]["required"];
+    assert_eq!(spawn, &json!(["title", "brief", "files"]));
+    let spawn = &bus::tools("ceo")["tools"][0]["inputSchema"]["required"];
+    assert_eq!(spawn, &json!(["title", "brief"]));
+
+    let [_, l1, _, a1, ..] = &all;
+    let e = tool(&app, a1, "send", json!({"to": "ceo", "body": "hi"})).unwrap_err();
+    assert_eq!(e, "ceo is not linked to you on the bus");
+    for to in ["b1", "l2", "d1", "l3"] {
+        let e = tool(&app, a1, "send", json!({"to": to, "body": "hi"})).unwrap_err();
+        assert!(e.contains("not linked"), "{to}: {e}");
+    }
+    let e = tool(&app, l1, "send", json!({"to": "b1", "body": "hi"})).unwrap_err();
+    assert!(e.contains("not linked"), "{e}");
+    // Linked is not spawned: a Lead never stops or interrupts its CEO or a sibling Lead.
+    let e = tool(&app, l1, "stop", json!({"to": "ceo"})).unwrap_err();
+    assert_eq!(e, "ceo was not spawned by you");
+    let e = tool(&app, l1, "interrupt", json!({"to": "l2", "body": "x"})).unwrap_err();
+    assert_eq!(e, "l2 was not spawned by you");
+    let e = tool(&app, a1, "ask_ceo", json!({"body": "?"})).unwrap_err();
+    assert_eq!(e, "ask_ceo is not a tool of the executor");
+    let e = tool(&app, l1, "spawn_lead", json!({"title": "t", "brief": "b"})).unwrap_err();
+    assert_eq!(e, "spawn_lead is not a tool of the lead");
+    let e = tool(
+        &app,
+        l1,
+        "spawn_executor",
+        json!({"title": "t", "brief": "b"}),
+    )
+    .unwrap_err();
+    assert!(e.contains("files is required"), "{e}");
+    let bad = json!({"title": "t", "brief": "b", "files": "src"});
+    assert!(tool(&app, l1, "spawn_executor", bad).is_err());
+    assert!(store.list_messages(&p.id).unwrap().is_empty());
+
+    // An executor's report and ask go to its Lead, a teammate's send to the teammate, the Lead's report to the CEO.
+    tool(
+        &app,
+        a1,
+        "send",
+        json!({"to": "a2", "body": "mine is a.txt"}),
+    )
+    .unwrap();
+    tool(&app, a1, "report", json!({"body": "done"})).unwrap();
+    tool(&app, a1, "ask", json!({"body": "which?"})).unwrap();
+    tool(&app, l1, "send", json!({"to": "l2", "body": "careful"})).unwrap();
+    tool(&app, l1, "report", json!({"body": "merged"})).unwrap();
+    let pending = tool(&app, l1, "ask_ceo", json!({"body": "conflict?"})).unwrap();
+    assert!(
+        pending.contains("call mcp__ceo__ask_ceo with resume"),
+        "{pending}"
+    );
+    let got: Vec<String> = store
+        .list_messages(&p.id)
+        .unwrap()
+        .iter()
+        .map(|m| format!("{} {}>{}", m.kind, m.from, m.to))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "send a1>a2",
+            "report a1>l1",
+            "ask a1>l1",
+            "send l1>l2",
+            "report l1>ceo",
+            "ask l1>ceo"
+        ]
+    );
+}
+
+#[test]
+fn files_overlap_on_path_boundaries() {
+    let v = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let o = |a: &[&str], b: &[&str]| bus::overlap(&v(a), &v(b)).map(|(x, y)| format!("{x} {y}"));
+    assert_eq!(
+        o(&["src/a.rs"], &["src/a.rs"]).as_deref(),
+        Some("src/a.rs src/a.rs")
+    );
+    assert_eq!(
+        o(&["x", "src/a.rs"], &["src"]).as_deref(),
+        Some("src/a.rs src")
+    );
+    assert_eq!(
+        o(&["src/"], &["src/a/b.rs"]).as_deref(),
+        Some("src/ src/a/b.rs")
+    );
+    assert_eq!(
+        o(&["./src/a"], &["src/a/b.rs"]).as_deref(),
+        Some("./src/a src/a/b.rs")
+    );
+    assert_eq!(
+        o(&["."], &["docs"]).as_deref(),
+        Some(". docs"),
+        "the whole repo"
+    );
+    assert_eq!(o(&["/src/app"], &["src"]).as_deref(), Some("/src/app src"));
+    assert_eq!(o(&["src/a"], &["src/ab"]), None, "not on a / boundary");
+    assert_eq!(o(&["src/a.rs"], &["src/a.rs.bak"]), None);
+    assert_eq!(o(&["a", "b"], &["c/a", "bb"]), None);
+    assert_eq!(o(&[], &["src"]), None, "a review touches nothing");
+}
+
+#[test]
+fn a_lead_spawns_its_team_off_its_branch_and_is_retired_after_it() {
+    let sock = TestSocket(format!("ceo-test-team-{}", std::process::id()));
+    let (d, repo) = repo();
+    let app = mock_app(d.path(), Ok(sleeper(d.path())), &sock.0);
+    let (s, store) = (app.state::<Sessions>(), app.state::<Store>());
+    let p = store.create_project("p", repo.to_str().unwrap()).unwrap();
+    let ceo = s
+        .create(&store, &p.id, "ceo-node", "ceo", None, "ceo")
+        .unwrap();
+    let ceo_node = BoardNode {
+        id: "ceo-node".into(),
+        kind: "ceo".into(),
+        x: 0.0,
+        y: 0.0,
+        width: None,
+        height: None,
+        data: json!({"name": "CEO", "model": "haiku"}),
+        z: 0,
+    };
+    let changes = BoardChanges {
+        upsert_nodes: vec![ceo_node],
+        ..Default::default()
+    };
+    store.save_board(&p.id, &changes).unwrap();
+    // A spawned session, with the args file the sleeper writes read and removed, so its worktree is clean.
+    let spawned = |out: Result<String, String>| {
+        let out = out.unwrap();
+        let v: serde_json::Value = serde_json::from_str(out.lines().next().unwrap()).unwrap();
+        let row = store
+            .node_session(&p.id, v["node"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        let wt = PathBuf::from(row.worktree.clone().unwrap());
+        let args = wait_read(&wt.join("args"));
+        std::fs::remove_file(wt.join("args")).unwrap();
+        (row, wt, args)
+    };
+
+    let brief = json!({"title": "Wave of three", "brief": "a; b; c", "model": "sonnet"});
+    let (lead, lead_wt, args) = spawned(tool(&app, &ceo, "spawn_lead", brief));
+    assert_eq!(
+        (lead.role.as_str(), lead.parent.as_deref()),
+        ("lead", Some("ceo-node"))
+    );
+    let lead_branch = lead.branch.clone().unwrap();
+    assert!(
+        lead_branch.starts_with("ceo/lead-wave-of-three-"),
+        "{lead_branch}"
+    );
+    assert!(lead.tmux_name.starts_with("lead-"));
+    assert!(
+        args.contains("--append-system-prompt You are a Lead") && args.contains("--model sonnet"),
+        "{args}"
+    );
+    git(
+        &lead_wt,
+        &["commit", "-q", "--allow-empty", "-m", "lead base"],
+    );
+
+    let team = |title: &str, files: serde_json::Value| {
+        let brief = json!({"title": title, "brief": format!("write {title}"), "files": files});
+        tool(&app, &lead, "spawn_executor", brief)
+    };
+    let (a, a_wt, args) = spawned(team("a", json!(["src/a"])));
+    assert!(args.contains("--model sonnet"), "the Lead's model: {args}");
+    let e = team("a2", json!(["src/a/x.rs"])).unwrap_err();
+    assert!(
+        e.contains("src/a/x.rs overlaps src/a")
+            && e.contains(&a.node_id)
+            && e.contains("wait for its report"),
+        "{e}"
+    );
+    let (b, b_wt, _) = spawned(team("b", json!(["src/b"])));
+    let (c, c_wt, _) = spawned(team("c", json!(["src/c"])));
+    assert_eq!(
+        git(&a_wt, &["rev-parse", "HEAD"]),
+        git(&lead_wt, &["rev-parse", "HEAD"]),
+        "executors start off the Lead's branch"
+    );
+    let board = store.load_board(&p.id).unwrap();
+    let at = |id: &str| board.nodes.iter().find(|n| n.id == id).unwrap();
+    let ln = at(&lead.node_id);
+    assert_eq!((ln.kind.as_str(), ln.x, ln.y), ("lead", 1000.0, 0.0));
+    for (i, x) in [&a, &b, &c].into_iter().enumerate() {
+        let n = at(&x.node_id);
+        assert_eq!(
+            (n.kind.as_str(), n.x, n.y, n.data["leadId"].as_str()),
+            (
+                "executor",
+                2000.0,
+                320.0 * i as f64,
+                Some(lead.node_id.as_str())
+            )
+        );
+        assert_eq!(x.parent.as_deref(), Some(lead.node_id.as_str()));
+        assert!(board.edges.iter().any(|e| e.source == lead.node_id
+            && e.target == x.node_id
+            && e.data["kind"] == "spawn"));
+    }
+
+    // a and b are merged into the Lead; c's commit is not.
+    for (wt, f) in [(&a_wt, "a"), (&b_wt, "b"), (&c_wt, "c")] {
+        std::fs::write(wt.join(f), f).unwrap();
+        git(wt, &["add", f]);
+        git(wt, &["commit", "-q", "-m", f]);
+    }
+    for x in [&a, &b] {
+        let branch = x.branch.as_deref().unwrap();
+        git(
+            &lead_wt,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                &format!("Merge {branch}"),
+                branch,
+            ],
+        );
+    }
+    for x in [&lead, &b, &c] {
+        store.set_session_status(&x.id, "idle", "Ready").unwrap();
+    }
+    let tmux = s.tmux().unwrap();
+
+    // The Lead accepts a's report: a ends after its turn and its branch, merged into the Lead, is deleted.
+    tool(&app, &a, "report", json!({"body": "a done"})).unwrap();
+    let m = store.inbox(&p.id, &lead.node_id).unwrap().pop().unwrap();
+    tool(&app, &lead, "accept", json!({"id": m.id})).unwrap();
+    // Accepted is done: a follow-up on a's files may start while a still finishes its turn.
+    let (follow, follow_wt, _) = spawned(team("a again", json!(["src/a/x.rs"])));
+    assert!(store.session(&a.id).unwrap().is_some(), "a is still ending");
+    store.set_session_status(&a.id, "idle", "Ready").unwrap();
+    store
+        .set_session_status(&follow.id, "idle", "Ready")
+        .unwrap();
+    wait_until("a ends", || store.session(&a.id).unwrap().is_none());
+    assert!(!tmux.has(&a.tmux_name) && !a_wt.exists());
+    assert!(!branches(&repo).contains(a.branch.as_deref().unwrap()));
+
+    // The CEO accepts the Lead's report: b and c end first, then the Lead.
+    tool(
+        &app,
+        &lead,
+        "report",
+        json!({"body": "merged a, b; gate ok"}),
+    )
+    .unwrap();
+    let m = store.inbox(&p.id, "ceo-node").unwrap().pop().unwrap();
+    assert_eq!(m.from, lead.node_id);
+    let text = tool(&app, &ceo, "accept", json!({"id": m.id})).unwrap();
+    assert!(text.contains("the Lead and its executors end"), "{text}");
+    wait_until("the Lead ends", || {
+        store.session(&lead.id).unwrap().is_none()
+    });
+    for x in [&lead, &b, &c, &follow] {
+        assert!(store.session(&x.id).unwrap().is_none());
+        assert!(!tmux.has(&x.tmux_name), "{}", x.tmux_name);
+    }
+    assert!(!lead_wt.exists() && !b_wt.exists() && !c_wt.exists() && !follow_wt.exists());
+    // b's branch went only because it was checked against the Lead's worktree, so b ended before the Lead.
+    let left = branches(&repo);
+    assert!(!left.contains(b.branch.as_deref().unwrap()), "{left}");
+    assert!(
+        left.contains(c.branch.as_deref().unwrap()),
+        "unmerged work stays: {left}"
+    );
+    assert!(left.contains(&lead_branch), "{left}");
+    assert_eq!(
+        git(&repo, &["log", "--merges", "--format=%s", &lead_branch])
+            .lines()
+            .count(),
+        2
+    );
+    let board = store.load_board(&p.id).unwrap();
+    assert_eq!(
+        board
+            .nodes
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect::<Vec<_>>(),
+        ["ceo-node"]
+    );
+    assert!(board.edges.is_empty());
+    app.state::<Sessions>().remove(&store, &ceo).unwrap();
 }

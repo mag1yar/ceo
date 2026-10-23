@@ -382,7 +382,15 @@ impl Sessions {
             (Some(path), Some(branch)) => {
                 // The real path is gone once the worktree is.
                 let key = trust::key(path);
-                let kept = worktree::remove(&row.repo, path, branch).err();
+                // A Lead's executor runs git in the Lead's worktree, so `branch -d` drops a branch merged into the Lead.
+                let base = row
+                    .parent
+                    .as_deref()
+                    .and_then(|p| store.node_session(&row.project_id, p).ok().flatten())
+                    .filter(|p| p.role == "lead")
+                    .and_then(|p| p.worktree)
+                    .unwrap_or_else(|| row.repo.clone());
+                let kept = worktree::remove(&base, path, branch).err();
                 if !Path::new(path).exists() {
                     self.trust(&key, false);
                 }
@@ -622,7 +630,13 @@ pub fn remove_project<R: Runtime>(app: &AppHandle<R>, project_id: &str) {
     let (Some(s), Some(store)) = (app.try_state::<Sessions>(), app.try_state::<Store>()) else {
         return;
     };
-    for row in store.project_sessions(project_id).unwrap_or_default() {
+    // Newest first: a Lead's executors go while its worktree still decides which of their branches are merged.
+    for row in store
+        .project_sessions(project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+    {
         if let Err(e) = s.remove(&store, &row) {
             println!("sessions: {e}");
         }
@@ -639,10 +653,10 @@ pub fn session_ensure<R: Runtime>(
     rows: u16,
 ) -> Res<Option<AgentSession>> {
     let store = app.state::<Store>();
-    // shortcut: the CEO starts its claude here and executors attach to theirs; Leads and Members stay shells.
+    // shortcut: the CEO starts its claude here, executors and spawned Leads attach to theirs; hand-placed Leads and Members stay shells.
     match store.node_role(&project_id, &node_id)?.as_deref() {
         Some("ceo") => {}
-        Some("executor") if store.node_session(&project_id, &node_id)?.is_some() => {}
+        Some("executor" | "lead") if store.node_session(&project_id, &node_id)?.is_some() => {}
         _ => return Ok(None),
     }
     let s = app.state::<Sessions>();
@@ -680,8 +694,8 @@ pub fn session_delete<R: Runtime>(
 ) -> Res<()> {
     let store = app.state::<Store>();
     match store.node_session(&project_id, &node_id)? {
-        // Executors end through the bus (their report accepted, or stop); a node undone on the board comes back.
-        Some(row) if row.role != "executor" => {
+        // Executors and Leads end through the bus (their report accepted, or stop); a node undone on the board comes back.
+        Some(row) if row.role == "ceo" => {
             for exec in store.project_sessions(&project_id)? {
                 if exec.parent.as_deref() == Some(&row.node_id) {
                     bus::retire(&app, exec, false, "Its CEO was removed");

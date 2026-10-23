@@ -28,16 +28,32 @@ struct BoardEvent<'a> {
 pub fn role_prompt(role: &str) -> &'static str {
     match role {
         "executor" => {
-            "You are an executor the CEO agent spawned for one task, in your own git worktree on your own branch. \
+            "You are an executor spawned for one task by the CEO agent or by a Lead, in your own git worktree on your own branch. \
              Do the brief, run its acceptance check, commit your work on your branch (never push, never touch main), \
              then call mcp__ceo__report with the result and the check's output. If you are blocked, call mcp__ceo__ask. \
+             If a Lead spawned you, report and ask reach your Lead, and mcp__ceo__send reaches only your teammates. \
              When told about new messages, call mcp__ceo__inbox and mcp__ceo__accept each one once handled."
         }
+        "lead" => {
+            "You are a Lead the CEO agent spawned for several tasks, in your own git worktree on your own branch. \
+             Split the brief into tasks and never put tasks that touch the same files into one parallel group. \
+             For each task call mcp__ceo__spawn_executor with a title, a brief with its acceptance check, and the files \
+             it will touch; each executor starts off your branch. Answer their asks with mcp__ceo__reply; what you cannot \
+             answer, ask the CEO with mcp__ceo__ask_ceo. When an executor reports, review its branch with \
+             `git diff <your branch>...<its branch>`; for a non-trivial change first spawn a review executor (model opus, \
+             files [], brief: review that diff, report findings, change nothing). Then merge it in your worktree with \
+             `git merge --no-ff <its branch>`, resolve conflicts yourself or ask the CEO, and mcp__ceo__accept the report, \
+             which ends that executor. After the last merge run the gate command named in your brief on your branch and \
+             call mcp__ceo__report with the merged commits and the gate's summary line. When told about new messages, \
+             call mcp__ceo__inbox and mcp__ceo__accept each one once handled. Never push and never touch main."
+        }
         _ => {
-            "You are the CEO agent of this project. Hand each task to an executor: call mcp__ceo__spawn_executor \
-             with a title and a brief that says what to do and which acceptance check to run. Executors answer \
+            "You are the CEO agent of this project. Shape the team per request: one task goes to one executor, call \
+             mcp__ceo__spawn_executor with a title and a brief that says what to do and which acceptance check to run; \
+             several tasks or a wave go to one Lead, call mcp__ceo__spawn_lead once with a brief that lists the tasks and \
+             names the project's gate command. Executors and Leads answer \
              through the bus: when told about new messages, call mcp__ceo__inbox, act on each, then mcp__ceo__accept it \
-             (or mcp__ceo__reply to an ask). Accepting an executor's report ends that executor; its branch stays for \
+             (or mcp__ceo__reply to an ask). Accepting a report ends its executor or Lead; the branch stays for \
              the owner to merge. Never merge into main and never push."
         }
     }
@@ -54,7 +70,12 @@ fn tool(name: &str, description: &str, props: Value, required: &[&str]) -> Value
 pub fn tools(role: &str) -> Value {
     let text = |d: &str| json!({ "type": "string", "description": d });
     let mut list = vec![];
-    if role == "ceo" {
+    let files = json!({
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Repo-relative paths or directory prefixes the task will touch",
+    });
+    if role != "executor" {
         list.extend([
             tool(
                 "spawn_executor",
@@ -62,10 +83,15 @@ pub fn tools(role: &str) -> Value {
                 json!({
                     "title": text("Short task title"),
                     "brief": text("What to do and the acceptance check to run"),
+                    "files": files,
                     "model": { "type": "string", "enum": MODELS },
                     "effort": { "type": "string", "enum": EFFORTS },
                 }),
-                &["title", "brief"],
+                if role == "lead" {
+                    &["title", "brief", "files"]
+                } else {
+                    &["title", "brief"]
+                },
             ),
             tool(
                 "send",
@@ -92,19 +118,56 @@ pub fn tools(role: &str) -> Value {
                 &["id", "body"],
             ),
         ]);
+        if role == "ceo" {
+            list.insert(
+                1,
+                tool(
+                    "spawn_lead",
+                    "Start a Lead for several tasks; it runs one executor per task off its own branch and merges them.",
+                    json!({
+                        "title": text("Short title of the task group"),
+                        "brief": text("The tasks and the project's gate command"),
+                        "model": { "type": "string", "enum": MODELS },
+                        "effort": { "type": "string", "enum": EFFORTS },
+                    }),
+                    &["title", "brief"],
+                ),
+            );
+        } else {
+            list.extend([
+                tool(
+                    "report",
+                    "Report the merged result and the gate's summary line to your CEO.",
+                    json!({ "body": text("Merged commits and the gate's output") }),
+                    &["body"],
+                ),
+                tool(
+                    "ask_ceo",
+                    "Ask your CEO and wait for the reply. Returns {pending: id} if it takes long; call again with resume: id.",
+                    json!({ "body": text("Question"), "resume": text("Id of an earlier ask to keep waiting for") }),
+                    &[],
+                ),
+            ]);
+        }
     } else {
         list.extend([
             tool(
                 "report",
-                "Report the task's result to your CEO.",
+                "Report the task's result to whoever spawned you, your CEO or your Lead.",
                 json!({ "body": text("Result and the acceptance check's output") }),
                 &["body"],
             ),
             tool(
                 "ask",
-                "Ask your CEO and wait for the reply. Returns {pending: id} if it takes long; call again with resume: id.",
+                "Ask whoever spawned you and wait for the reply. Returns {pending: id} if it takes long; call again with resume: id.",
                 json!({ "body": text("Question"), "resume": text("Id of an earlier ask to keep waiting for") }),
                 &[],
+            ),
+            tool(
+                "send",
+                "Send a message to a teammate, an executor with the same parent.",
+                json!({ "to": text("Executor node id"), "body": text("Message") }),
+                &["to", "body"],
             ),
         ]);
     }
@@ -149,20 +212,32 @@ fn dispatch<R: Runtime>(
             .ok_or_else(|| format!("{k} is required"))
     };
     match (row.role.as_str(), name) {
-        ("ceo", "spawn_executor") => spawn_executor(
+        ("ceo" | "lead", "spawn_executor") => spawn_executor(
             app,
             row,
+            "executor",
             arg("title")?,
             arg("brief")?,
+            files_arg(row, args)?,
             args["model"].as_str(),
             args["effort"].as_str(),
         ),
-        ("ceo", "send") => {
+        ("ceo", "spawn_lead") => spawn_executor(
+            app,
+            row,
+            "lead",
+            arg("title")?,
+            arg("brief")?,
+            None,
+            args["model"].as_str(),
+            args["effort"].as_str(),
+        ),
+        (_, "send") => {
             let to = peer(&store, row, arg("to")?)?;
             send(app, row, &to, "send", arg("body")?, None).map(|m| format!("Sent {}.", m.id))
         }
-        ("ceo", "interrupt") => {
-            let to = peer(&store, row, arg("to")?)?;
+        ("ceo" | "lead", "interrupt") => {
+            let to = child(&store, row, arg("to")?)?;
             let body = arg("body")?;
             app.state::<Sessions>()
                 .tmux()?
@@ -174,16 +249,21 @@ fn dispatch<R: Runtime>(
             }
             send(app, row, &to, "send", body, None).map(|m| format!("Interrupted, sent {}.", m.id))
         }
-        ("ceo", "stop") => {
-            let to = peer(&store, row, arg("to")?)?;
-            retire(app, to.clone(), false, "Stopped by the CEO");
+        ("ceo" | "lead", "stop") => {
+            let to = child(&store, row, arg("to")?)?;
+            let why = if row.role == "ceo" {
+                "Stopped by the CEO"
+            } else {
+                "Stopped by its Lead"
+            };
+            retire(app, to.clone(), false, why);
             Ok(format!(
                 "Stopping {}; branch {} stays if it has commits.",
                 to.node_id,
                 to.branch.as_deref().unwrap_or("-")
             ))
         }
-        ("ceo", "reply") => {
+        ("ceo" | "lead", "reply") => {
             let id = arg("id")?;
             let ask = store
                 .message(id)?
@@ -203,12 +283,14 @@ fn dispatch<R: Runtime>(
             }
             Ok(format!("Replied {}.", r.id))
         }
-        ("executor", "report") => {
+        ("executor" | "lead", "report") => {
             let ceo = parent(&store, row)?;
             send(app, row, &ceo, "report", arg("body")?, None)
                 .map(|m| format!("Reported {}.", m.id))
         }
-        ("executor", "ask") => ask(app, row, args, app.state::<Sessions>().ask_wait),
+        ("executor", "ask") | ("lead", "ask_ceo") => {
+            ask(app, row, args, app.state::<Sessions>().ask_wait)
+        }
         (_, "inbox") => {
             // Delivered once this result reaches claude: its PostToolUse marks them (see `delivered_in`).
             let list = store.inbox(&row.project_id, &row.node_id)?;
@@ -223,13 +305,15 @@ fn dispatch<R: Runtime>(
             emit(app, &m);
             if m.kind == "report"
                 && let Some(exec) = store.node_session(&row.project_id, &m.from)?
-                && exec.role == "executor"
+                && exec.role != "ceo"
             {
+                let who = if exec.role == "lead" {
+                    "the Lead and its executors end"
+                } else {
+                    "the executor ends"
+                };
                 retire(app, exec, true, "Report accepted");
-                return Ok(format!(
-                    "Accepted {}; the executor ends and its branch stays.",
-                    m.id
-                ));
+                return Ok(format!("Accepted {}; {who} and its branch stays.", m.id));
             }
             Ok(format!("Accepted {}.", m.id))
         }
@@ -237,14 +321,57 @@ fn dispatch<R: Runtime>(
     }
 }
 
-/// The only links on the bus: a CEO and the executors it spawned.
+/// The only links on the bus: a parent and what it spawned, and Leads or executors with the same parent.
 pub fn linked(a: &AgentSession, b: &AgentSession) -> bool {
+    let spawned = |p: &AgentSession, c: &AgentSession| c.parent.as_deref() == Some(&p.node_id);
+    let siblings = a.node_id != b.node_id && a.parent.is_some() && a.parent == b.parent;
     a.project_id == b.project_id
         && match (a.role.as_str(), b.role.as_str()) {
-            ("ceo", "executor") => b.parent.as_deref() == Some(&a.node_id),
-            ("executor", "ceo") => a.parent.as_deref() == Some(&b.node_id),
+            ("ceo" | "lead", "executor") | ("ceo", "lead") => spawned(a, b),
+            ("executor", "ceo" | "lead") | ("lead", "ceo") => spawned(b, a),
+            ("lead", "lead") | ("executor", "executor") => siblings,
             _ => false,
         }
+}
+
+/// The first pair of paths where one is the other or a directory prefix of it; "" or "." is the whole repo.
+pub fn overlap<'a>(a: &'a [String], b: &'a [String]) -> Option<(&'a str, &'a str)> {
+    let norm = |p: &'a str| match p
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .trim_end_matches('/')
+    {
+        "." => "",
+        p => p,
+    };
+    let within = |x: &str, y: &str| {
+        y.is_empty()
+            || x.strip_prefix(y)
+                .is_some_and(|r| r.is_empty() || r.starts_with('/'))
+    };
+    a.iter()
+        .flat_map(|x| b.iter().map(move |y| (x.as_str(), y.as_str())))
+        .find(|&(x, y)| within(norm(x), norm(y)) || within(norm(y), norm(x)))
+}
+
+/// `files` of spawn_executor: required of a Lead, optional for the CEO.
+fn files_arg(row: &AgentSession, args: &Value) -> Res<Option<Vec<String>>> {
+    match &args["files"] {
+        Value::Null if row.role == "lead" => {
+            Err("files is required: the paths or directories the task will touch".into())
+        }
+        Value::Null => Ok(None),
+        Value::Array(list) => list
+            .iter()
+            .map(|f| {
+                f.as_str()
+                    .map(str::to_string)
+                    .ok_or("files must be strings".to_string())
+            })
+            .collect::<Res<_>>()
+            .map(Some),
+        _ => Err("files must be an array of paths".into()),
+    }
 }
 
 fn peer(store: &Store, from: &AgentSession, to: &str) -> Res<AgentSession> {
@@ -252,6 +379,16 @@ fn peer(store: &Store, from: &AgentSession, to: &str) -> Res<AgentSession> {
         .node_session(&from.project_id, to)?
         .filter(|t| linked(from, t))
         .ok_or_else(|| format!("{to} is not linked to you on the bus"))
+}
+
+/// Only what the caller spawned may be interrupted or stopped, never its CEO or a sibling Lead.
+fn child(store: &Store, from: &AgentSession, to: &str) -> Res<AgentSession> {
+    let to = peer(store, from, to)?;
+    if to.parent.as_deref() == Some(&from.node_id) {
+        Ok(to)
+    } else {
+        Err(format!("{} was not spawned by you", to.node_id))
+    }
 }
 
 fn parent(store: &Store, row: &AgentSession) -> Res<AgentSession> {
@@ -428,8 +565,9 @@ fn ask<R: Runtime>(
         }
         if Instant::now() >= deadline {
             return Ok(format!(
-                "{}\nNo reply yet; call mcp__ceo__ask with resume \"{}\" to keep waiting.",
+                "{}\nNo reply yet; call mcp__ceo__{} with resume \"{}\" to keep waiting.",
                 json!({ "pending": ask.id }),
+                if row.role == "lead" { "ask_ceo" } else { "ask" },
                 ask.id
             ));
         }
@@ -449,11 +587,15 @@ fn slug(title: &str) -> String {
     if s.is_empty() { "task".into() } else { s }
 }
 
+/// Spawns an executor or a Lead (`kind`) under `ceo`, which is its parent: the CEO, or a Lead for an executor.
+#[allow(clippy::too_many_arguments)]
 fn spawn_executor<R: Runtime>(
     app: &AppHandle<R>,
     ceo: &AgentSession,
+    kind: &str,
     title: &str,
     brief: &str,
+    files: Option<Vec<String>>,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> Res<String> {
@@ -466,7 +608,7 @@ fn spawn_executor<R: Runtime>(
         .nodes
         .iter()
         .find(|n| n.id == ceo.node_id)
-        .ok_or("the CEO node is gone")?;
+        .ok_or("the spawning node is gone")?;
     // The executor runs the model it is given, else the CEO's own.
     let model = match model.or(ceo_node.data["model"].as_str()) {
         Some(m) if MODELS.contains(&m) => m,
@@ -475,15 +617,40 @@ fn spawn_executor<R: Runtime>(
     };
     let node_id = uuid();
     let op = s.lock();
+    // Under the lock, so two parallel spawns never both pass the check.
+    let sibs = store.project_sessions(&ceo.project_id)?;
+    for sib in sibs
+        .iter()
+        .filter(|r| r.role == "executor" && r.parent.as_deref() == Some(&ceo.node_id))
+        // An accepted report already ends its executor, so its files are free.
+        .filter(|r| !retiring().contains(&r.id))
+    {
+        let theirs: Vec<String> =
+            std::fs::read_to_string(s.session_dir(&sib.id).join("profile.json"))
+                .ok()
+                .and_then(|p| serde_json::from_str::<Value>(&p).ok())
+                .and_then(|p| serde_json::from_value(p["files"].clone()).ok())
+                .unwrap_or_default();
+        if let Some((a, b)) = overlap(files.as_deref().unwrap_or_default(), &theirs) {
+            return Err(format!(
+                "{a} overlaps {b} of executor {}, still running; wait for its report before you spawn this task",
+                sib.node_id
+            ));
+        }
+    }
     let row = s.create(
         &store,
         &ceo.project_id,
         &node_id,
-        "executor",
+        kind,
         Some(ceo),
-        &format!("exec-{}", slug(title)),
+        &format!(
+            "{}-{}",
+            if kind == "lead" { "lead" } else { "exec" },
+            slug(title)
+        ),
     )?;
-    let profile = json!({ "brief": brief, "model": model, "effort": effort });
+    let profile = json!({ "brief": brief, "model": model, "effort": effort, "files": files });
     let started = std::fs::create_dir_all(s.session_dir(&row.id))
         .and_then(|()| {
             std::fs::write(
@@ -500,22 +667,28 @@ fn spawn_executor<R: Runtime>(
         let _ = s.remove(&store, &row);
         return Err(e);
     }
-    // Below the lowest executor still on the board, so a new one never covers a live one.
+    // A column right of the parent, below the lowest spawned node in it, so a new one never covers a live one.
+    let x = ceo_node.x + 1000.0;
     let y = board
         .nodes
         .iter()
-        .filter(|n| n.kind == "executor")
+        .filter(|n| matches!(n.kind.as_str(), "executor" | "lead") && (n.x - x).abs() < 1000.0)
         .map(|n| n.y + 320.0)
         .fold(ceo_node.y, f64::max);
+    let mut data =
+        json!({ "name": title, "model": model, "branch": row.branch, "worktree": row.worktree });
+    if ceo.role == "lead" {
+        data["leadId"] = json!(ceo.node_id);
+    }
     let changes = BoardChanges {
         upsert_nodes: vec![BoardNode {
             id: node_id.clone(),
-            kind: "executor".into(),
-            x: ceo_node.x + 1000.0,
+            kind: kind.into(),
+            x,
             y,
             width: None,
             height: None,
-            data: json!({ "name": title, "model": model, "branch": row.branch, "worktree": row.worktree }),
+            data,
             z: 0,
         }],
         upsert_edges: vec![BoardEdge {
@@ -533,16 +706,41 @@ fn spawn_executor<R: Runtime>(
     emit_board(app, &ceo.project_id, &changes);
     report(app, &ceo.project_id, &node_id, "working", "Starting");
     Ok(format!(
-        "{}\nThe executor reports back through your inbox.",
-        json!({ "node": node_id, "branch": row.branch, "worktree": row.worktree })
+        "{}\nThe {} reports back through your inbox.",
+        json!({ "node": node_id, "branch": row.branch, "worktree": row.worktree }),
+        if kind == "lead" { "Lead" } else { "executor" }
     ))
 }
 
-/// Ends an executor after its turn (bounded) when `wait`: tmux session, worktree and node go, a branch with commits stays.
-pub fn retire<R: Runtime>(app: &AppHandle<R>, exec: AgentSession, wait: bool, why: &str) {
+/// Ends an executor or a Lead after its turn (bounded) when `wait`: tmux session, worktree and node go, a branch with commits stays.
+pub fn retire<R: Runtime>(
+    app: &AppHandle<R>,
+    exec: AgentSession,
+    wait: bool,
+    why: &str,
+) -> std::thread::JoinHandle<()> {
     let (app, why) = (app.clone(), why.to_string());
     std::thread::spawn(move || {
         let store = app.state::<Store>();
+        if !retiring().insert(exec.id.clone()) {
+            // Already ending on another thread: wait for it, so a Lead still goes after its team.
+            let deadline = Instant::now() + Duration::from_secs(70);
+            while Instant::now() < deadline && store.session(&exec.id).ok().flatten().is_some() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            return;
+        }
+        // A Lead's team goes first, while the Lead's worktree still decides which of their branches are merged.
+        let team: Vec<_> = store
+            .project_sessions(&exec.project_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.parent.as_deref() == Some(&exec.node_id))
+            .map(|c| retire(&app, c, wait, "Its Lead ended"))
+            .collect();
+        for t in team {
+            let _ = t.join();
+        }
         let deadline = Instant::now() + Duration::from_secs(if wait { 60 } else { 0 });
         while Instant::now() < deadline
             && store
@@ -572,5 +770,15 @@ pub fn retire<R: Runtime>(app: &AppHandle<R>, exec: AgentSession, wait: bool, wh
         }
         emit_board(&app, &exec.project_id, &changes);
         report(&app, &exec.project_id, &exec.node_id, "done", &why);
-    });
+        retiring().remove(&exec.id);
+    })
+}
+
+/// Sessions being retired, so a Lead's retire and its executor's own never remove one twice.
+fn retiring() -> std::sync::MutexGuard<'static, std::collections::HashSet<String>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }

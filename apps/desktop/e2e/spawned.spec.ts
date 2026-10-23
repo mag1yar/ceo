@@ -213,3 +213,61 @@ test("a spawned executor joins the open board, survives undo and leaves only whe
     .toEqual(["ceo", "note"])
   expect((await board(page, projectId)).edges).toEqual([])
 })
+
+test("a spawned Lead and its executor enter like an executor, stay Rust's across a reload and leave together", async ({
+  page,
+}) => {
+  const projectId = await open(page)
+  const lead: BoardNode = {
+    ...exec,
+    id: "lead-1",
+    type: "lead",
+    data: { name: "Wave of three", model: "sonnet", branch: "ceo/lead-x" },
+  }
+  const member: BoardNode = {
+    ...exec,
+    id: "exec-2",
+    x: 2000,
+    data: { ...(exec.data as object), leadId: lead.id },
+  }
+  const edges: BoardEdge[] = [
+    { ...link, target: lead.id },
+    { id: "spawn-2", source: lead.id, target: member.id, data: link.data },
+  ]
+  const leads = page.locator(".react-flow__node-lead")
+  const executors = page.locator(".react-flow__node-executor")
+
+  const entering = transitions(page, ".react-flow__node-lead > *")
+  await rust(page, projectId, { upsertNodes: [lead], upsertEdges: [edges[0]] })
+  expect(await entering).toEqual(["opacity", "transform"])
+  await rust(page, projectId, {
+    upsertNodes: [member],
+    upsertEdges: [edges[1]],
+  })
+  await expect(executors).toHaveCount(1)
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2)
+
+  // After a reload the Lead is known as Rust's from its spawn link: deleted by hand, it comes back.
+  await page.reload()
+  await expect(leads).toHaveCount(1)
+  await leads.locator("header").click()
+  await page.keyboard.press("Backspace")
+  await page.waitForTimeout(500)
+  await expect(leads).toHaveCount(1)
+  await expect(executors).toHaveCount(1)
+  await expect
+    .poll(async () => (await board(page, projectId)).nodes.length)
+    .toBe(3)
+
+  // Rust retires the team, then the Lead: both play the executor's leave.
+  const leaving = transitions(page, ".react-flow__node-lead.leaving > *")
+  await rust(page, projectId, { deleteNodeIds: [member.id] })
+  await rust(page, projectId, { deleteNodeIds: [lead.id] })
+  expect(await leaving).toEqual(["opacity", "transform"])
+  await expect(leads).toHaveCount(0)
+  await expect(executors).toHaveCount(0)
+  await expect(page.locator(".react-flow__edge")).toHaveCount(0)
+  await expect
+    .poll(async () => (await board(page, projectId)).nodes.map((n) => n.id))
+    .toEqual([ceo.id])
+})

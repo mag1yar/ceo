@@ -12,7 +12,7 @@ import type { BoardChanges, BoardEdge, BoardNode } from "@/lib/store"
 import { focusedId, toggleFocus } from "./AgentTerminals"
 import "./spawned.css"
 
-// Rust emits this when the bus adds or removes board items: a spawned executor and its link to the CEO.
+// Rust emits this when the bus adds or removes board items: a spawned executor or Lead and its link to its parent.
 export const BOARD_EVENT = "board://changes"
 
 type Change = Partial<BoardChanges> & { projectId: string }
@@ -21,9 +21,13 @@ type Saved = RefObject<{
   edges: Map<string, BoardEdge>
 }>
 
-const ownedNode = (n: BoardNode) => n.type === "executor"
 const ownedEdge = (e: BoardEdge) =>
   (e.data as { kind?: string } | null)?.kind === "spawn"
+// A Lead is Rust's only when spawned; one the owner placed by hand has no spawn link.
+const ownedNode = (n: BoardNode, edges: Map<string, BoardEdge>) =>
+  n.type === "executor" ||
+  (n.type === "lead" &&
+    [...edges.values()].some((e) => ownedEdge(e) && e.target === n.id))
 
 // Motion classes live on the React Flow item only, never in its data, so the save and the store never see them.
 const spawn = <T extends Node | Edge>(x: T): T => ({
@@ -75,7 +79,11 @@ export function useSpawned(
     leaving: Set<string>
   }>(null)
   owned.current ??= {
-    nodes: new Map([...saved.current.nodes].filter(([, n]) => ownedNode(n))),
+    nodes: new Map(
+      [...saved.current.nodes].filter(([, n]) =>
+        ownedNode(n, saved.current.edges)
+      )
+    ),
     edges: new Map([...saved.current.edges].filter(([, e]) => ownedEdge(e))),
     removed: new Set(),
     leaving: new Set(),
@@ -86,7 +94,7 @@ export function useSpawned(
       const o = owned.current
       if (c.projectId !== projectId || !o) return
       const s = saved.current
-      // A delete for an executor already on its way out is a no-op.
+      // A delete for a node already on its way out is a no-op.
       const gone = new Set(c.deleteNodeIds?.filter((id) => !o.leaving.has(id)))
       const goneEdge = (e: { id: string; source: string; target: string }) =>
         gone.has(e.source) ||

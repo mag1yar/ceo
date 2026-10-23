@@ -11,9 +11,12 @@ const arg = (name) => {
 const settings = JSON.parse(readFileSync(arg("--settings"), "utf8"))
 const resumed = arg("--resume") !== undefined
 const id = arg("--resume") ?? arg("--session-id")
-const role = arg("--append-system-prompt")?.startsWith("You are an executor")
+const prompt0 = arg("--append-system-prompt") ?? ""
+const role = prompt0.startsWith("You are an executor")
   ? "executor"
-  : "ceo"
+  : prompt0.startsWith("You are a Lead")
+    ? "lead"
+    : "ceo"
 const brief = args.includes("--")
   ? args.slice(args.indexOf("--") + 1).join(" ")
   : undefined
@@ -109,10 +112,11 @@ async function bash(command, run) {
 // Messages as the bus renders them: "- id <id> · <kind> from <node>: <body>".
 async function handle(text) {
   let asked = false
-  for (const [, mid, kind] of (text ?? "").matchAll(
-    /^- id (\w+) · (\w+) from /gm
+  for (const [, mid, kind, from] of (text ?? "").matchAll(
+    /^- id (\w+) · (\w+) from ([\w-]+):/gm
   )) {
-    if (kind === "ask") {
+    if (role === "lead") await lead.handle(mid, kind, from)
+    else if (kind === "ask") {
       asked = true
       await tool("reply", { id: mid, body: "hello.txt" })
     } else {
@@ -141,9 +145,19 @@ async function stop() {
 // A task that says "idle" gets its report typed into the idle CEO, as with a real claude, instead of on the CEO's Stop.
 let idleReport = false
 
-// CEO: a typed task becomes one executor, with a note it gets while busy.
+// CEO: a typed task becomes one executor, with a note it gets while busy; tasks split by ";" become one Lead.
 async function task(line) {
   await prompt(line)
+  const tasks = line.split(";").map((t) => t.trim().split(/\s+/).pop())
+  if (tasks.length > 1) {
+    const spawned = await tool("spawn_lead", {
+      title: `Team of ${tasks.length}`,
+      brief: `Tasks: ${tasks.join("; ")}\nGate: sh gate.sh`,
+    })
+    const { node } = JSON.parse(spawned.split("\n")[0])
+    await tool("send", { to: node, body: "Merge each into your branch." })
+    return stop()
+  }
   idleReport = line.includes("idle")
   const spawned = await tool("spawn_executor", {
     title: line,
@@ -162,6 +176,86 @@ async function pointer(line) {
   await stop()
 }
 
+const git = (...a) =>
+  execFileSync("git", [
+    "-c",
+    "user.name=stub",
+    "-c",
+    "user.email=stub@ceo",
+    "-c",
+    "commit.gpgsign=false",
+    ...a,
+  ])
+    .toString()
+    .trim()
+
+// Lead: one executor per task, answers their asks, reviews and merges each report, then the gate and one report up.
+const lead = {
+  team: new Map(),
+  merged: [],
+  seen: new Set(),
+  // Asks that came before their spawn call returned the asker's node.
+  later: [],
+  ceo: undefined,
+  total: 0,
+  async run() {
+    await prompt(brief)
+    // The CEO's note names the CEO, which one executor probes with a send it must not be allowed.
+    for (let i = 0; i < 50 && !lead.ceo; i++) {
+      await handle(await tool("inbox"))
+      if (!lead.ceo) await sleep(100)
+    }
+    const files = brief.match(/^Tasks: (.*)$/m)[1].split("; ")
+    lead.total = files.length
+    for (const [i, file] of files.entries()) {
+      const probe = i === 0 && lead.ceo ? `\nProbe: ${lead.ceo}` : ""
+      const spawned = await tool("spawn_executor", {
+        title: `Write ${file}`,
+        brief: `Write the file your Lead names, commit it, check it exists, then report.${probe}`,
+        files: [file],
+      })
+      const { node, branch } = JSON.parse(spawned.split("\n")[0])
+      lead.team.set(node, { file, branch })
+    }
+    for (const m of lead.later.splice(0)) await lead.handle(...m)
+    await stop()
+  },
+  async handle(mid, kind, from) {
+    if (lead.seen.has(mid)) return
+    const member = lead.team.get(from)
+    if (kind === "ask" && !member) return lead.later.push([mid, kind, from])
+    lead.seen.add(mid)
+    if (kind === "ask") return tool("reply", { id: mid, body: member.file })
+    if (kind !== "report" || !member) {
+      if (kind === "send") lead.ceo ??= from
+      return tool("accept", { id: mid })
+    }
+    // A one-file change is trivial, so the stub reads the diff itself (a while, as a real Lead) and spawns no review executor.
+    await sleep(2000)
+    const me = git("rev-parse", "--abbrev-ref", "HEAD")
+    await bash(`git diff ${me}...${member.branch}`, () =>
+      git("diff", `${me}...${member.branch}`)
+    )
+    await bash(`git merge --no-ff ${member.branch}`, () =>
+      git("merge", "--no-ff", "-m", `Merge ${member.branch}`, member.branch)
+    )
+    lead.merged.push(member.branch)
+    await tool("accept", { id: mid })
+    if (lead.merged.length === lead.total) await lead.finish()
+  },
+  async finish() {
+    const gate = brief.match(/^Gate: (.*)$/m)[1]
+    let output = ""
+    await bash(gate, () => {
+      output = execSync(gate).toString().trim()
+    })
+    const merges = git("log", "--merges", "--format=%s").split("\n")
+    await tool("report", {
+      body: `Merged ${merges.length}: ${merges.join(", ")}; gate ${gate}: ${output}`,
+    })
+  },
+}
+
 async function execute() {
   await prompt(brief)
   let r = await tool("ask", { body: "Which file should I write?" })
@@ -169,24 +263,18 @@ async function execute() {
     r = await tool("ask", { resume: JSON.parse(r.split("\n")[0]).pending })
   const [, reply, file] = r.match(/^Reply id (\w+) to your ask: (.*)$/m)
   await tool("accept", { id: reply })
-  const git = (...a) =>
-    execFileSync("git", [
-      "-c",
-      "user.name=stub",
-      "-c",
-      "user.email=stub@ceo",
-      "-c",
-      "commit.gpgsign=false",
-      ...a,
-    ])
   await bash(`git commit -m "Add ${file}"`, () => {
     writeFileSync(file, "hello\n")
     git("add", file)
     git("commit", "-qm", `Add ${file}`)
   })
   if (brief.includes("Pause before you report")) await sleep(2000)
+  const probe = brief.match(/^Probe: (\S+)$/m)?.[1]
+  const sent = probe
+    ? `; send to the CEO: ${await tool("send", { to: probe, body: "Done here." })}`
+    : ""
   await tool("report", {
-    body: `Committed ${file}; check test -f ${file}: passed`,
+    body: `Committed ${file}; check test -f ${file}: passed${sent}`,
   })
   await stop()
 }
@@ -207,6 +295,7 @@ if (shim) {
   )
 }
 if (role === "executor" && brief && !resumed) await execute()
+if (role === "lead" && brief && !resumed) await lead.run()
 
 const words = {
   work: async () => {

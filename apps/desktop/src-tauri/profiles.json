@@ -1,0 +1,7 @@
+{
+  "ceo": { "model": "opus", "effort": "medium" },
+  "lead": { "model": "sonnet", "effort": "high" },
+  "executor": { "model": "sonnet" },
+  "mechanical": { "model": "haiku" },
+  "review": { "model": "opus" }
+}

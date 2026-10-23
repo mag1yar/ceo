@@ -337,7 +337,7 @@ function Canvas({
       <DotGrid />
       <ZoomControls />
       <BoardToolbar onAddNote={addNoteAtCenter} onAddDiagram={addDiagram} />
-      <AgentInspector />
+      <AgentInspector projectId={projectId} />
       <AgentTerminals projectId={projectId} />
       <SignalLayer projectId={projectId} />
       {import.meta.env.DEV && <SeedTeam projectId={projectId} />}

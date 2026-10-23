@@ -7,16 +7,16 @@ import {
   useOnSelectionChange,
   useReactFlow,
 } from "@xyflow/react"
-import { type ReactNode, useCallback, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useState } from "react"
 import { toEdge } from "@/features/board/link"
-import { store } from "@/lib/store"
+import { store, type Usage } from "@/lib/store"
 import { StatusIcon } from "./AgentNode"
 import { useFocusedId } from "./AgentTerminals"
 import { type AgentNode, isAgent, MODEL_LABEL, ROLE_LABEL } from "./agent"
 import { STATUS_LABEL, useLive } from "./status"
 import { buildTeam } from "./team"
 
-export function AgentInspector() {
+export function AgentInspector({ projectId }: { projectId: string }) {
   const [agent, setAgent] = useState<AgentNode>()
   const onChange: OnSelectionChangeFunc = useCallback(
     ({ nodes }) =>
@@ -28,13 +28,20 @@ export function AgentInspector() {
   const focused = useFocusedId() !== undefined
   return agent && !focused ? (
     <Panel position="top-right">
-      <Inspector agent={agent} />
+      <Inspector key={agent.id} agent={agent} projectId={projectId} />
     </Panel>
   ) : null
 }
 
-function Inspector({ agent }: { agent: AgentNode }) {
+function Inspector({
+  agent,
+  projectId,
+}: {
+  agent: AgentNode
+  projectId: string
+}) {
   const { status, action } = useLive(agent.id)
+  const usage = useUsage(projectId, agent.id, status)
   const { name, model, branch, worktree } = agent.data
   return (
     <aside
@@ -58,8 +65,59 @@ function Inspector({ agent }: { agent: AgentNode }) {
         <Row label="Worktree" mono>
           {worktree}
         </Row>
+        {usage ? (
+          <Row label="Tokens">
+            <TokenCounts usage={usage} />
+          </Row>
+        ) : null}
       </dl>
     </aside>
+  )
+}
+
+// The node's latest session; read again whenever its status moves, which is when a turn ends.
+function useUsage(projectId: string, nodeId: string, status: string) {
+  const [usage, setUsage] = useState<Usage>()
+  // biome-ignore lint/correctness/useExhaustiveDependencies: status is the refetch signal
+  useEffect(() => {
+    let current = true
+    store.listUsage(projectId).then((list) => {
+      if (current) setUsage(list.findLast((u) => u.nodeId === nodeId))
+    }, console.error)
+    return () => {
+      current = false
+    }
+  }, [projectId, nodeId, status])
+  return usage
+}
+
+const compact = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+})
+
+function TokenCounts({ usage }: { usage: Usage }) {
+  const counts = [
+    ["in", usage.input],
+    ["out", usage.output],
+    ["read", usage.cacheRead],
+    ["write", usage.cacheWrite1h + usage.cacheWrite5m],
+  ] as const
+  return (
+    <span
+      data-slot="usage"
+      className="grid grid-cols-4 gap-2"
+      title={counts
+        .map(([k, v]) => `${k} ${v.toLocaleString("en")}`)
+        .join(", ")}
+    >
+      {counts.map(([label, value]) => (
+        <span key={label} className="flex flex-col">
+          <span className="tabular-nums">{compact.format(value)}</span>
+          <span className="text-xs text-muted-foreground">{label}</span>
+        </span>
+      ))}
+    </span>
   )
 }
 

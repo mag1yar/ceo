@@ -77,6 +77,32 @@ CREATE INDEX messages_to ON messages (project_id, to_node, state);
     "
 ALTER TABLE messages ADD COLUMN closed_at INTEGER;
 ",
+    "
+CREATE TABLE usage (
+    session_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    task TEXT NOT NULL,
+    transcript TEXT,
+    input INTEGER NOT NULL,
+    output INTEGER NOT NULL,
+    cache_read INTEGER NOT NULL,
+    cache_write_1h INTEGER NOT NULL,
+    cache_write_5m INTEGER NOT NULL,
+    first_prompt INTEGER,
+    idle_misses TEXT NOT NULL,
+    compactions INTEGER NOT NULL,
+    context INTEGER,
+    wave_contexts TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX usage_project ON usage (project_id, updated_at);
+CREATE TABLE transcript_cursors (
+    path TEXT PRIMARY KEY,
+    cursor TEXT NOT NULL
+);
+",
 ];
 
 pub fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {

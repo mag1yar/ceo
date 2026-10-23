@@ -19,6 +19,10 @@
       "cache": false,
       "passThroughEnv": ["TAURI_WEBDRIVER_PORT"]
     },
+    "test:e2e:measure": {
+      "cache": false,
+      "passThroughEnv": ["TAURI_WEBDRIVER_PORT"]
+    },
     "dev": {
       "cache": false,
       "persistent": true

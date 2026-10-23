@@ -12,7 +12,8 @@
     "test": "vitest run --dir src",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:e2e": "playwright test",
-    "test:e2e:app": "CARGO_TARGET_DIR=target/e2e tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts"
+    "test:e2e:app": "CARGO_TARGET_DIR=target/e2e tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json && wdio run wdio.conf.ts",
+    "test:e2e:measure": "CARGO_TARGET_DIR=target/e2e tauri build --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json && CEO_E2E_APP=src-tauri/target/e2e/release/ceo wdio run wdio.conf.ts --spec e2e/app/measure/measure.ts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

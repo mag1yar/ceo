@@ -1,8 +1,12 @@
 import { type ChildProcess, execSync, spawn } from "node:child_process"
 import { browser, expect } from "@wdio/globals"
 
+// Same binary wdio.conf launched: the release build in the measurement run.
+export const appBinary =
+  process.env.CEO_E2E_APP ?? "src-tauri/target/e2e/debug/ceo"
+
 // The app process serving our WebDriver port; by port so a sibling worktree's app is never touched.
-const appPid = () =>
+export const appPid = () =>
   Number(
     execSync(`lsof -ti tcp:${browser.options.port} -sTCP:LISTEN`).toString()
   )
@@ -32,7 +36,7 @@ export async function restartApp(
   const old = appPid()
   await quit(old)
   await browser.waitUntil(() => !alive(old))
-  relaunched = spawn("src-tauri/target/e2e/debug/ceo", [], {
+  relaunched = spawn(appBinary, [], {
     env: {
       ...process.env,
       HOME: process.env.CEO_E2E_HOME,

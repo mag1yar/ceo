@@ -23,6 +23,8 @@ const sessionEnv = {
   CEO_CLAUDE_BIN: process.env.CEO_CLAUDE_BIN,
 }
 const port = Number(process.env.TAURI_WEBDRIVER_PORT) || worktreePort(4445)
+// The measurement run swaps in the release build.
+const appBinary = process.env.CEO_E2E_APP ?? "src-tauri/target/e2e/debug/ceo"
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -32,7 +34,7 @@ export const config: WebdriverIO.Config = {
     {
       browserName: "tauri",
       // Separate target dir (relative to src-tauri, where cargo runs) so e2e builds never overwrite the dev binary.
-      "tauri:options": { application: "src-tauri/target/e2e/debug/ceo" },
+      "tauri:options": { application: appBinary },
     } as WebdriverIO.Capabilities,
   ],
   services: [

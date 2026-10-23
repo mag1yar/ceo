@@ -6,7 +6,8 @@
     "dev": "turbo run dev",
     "gate": "turbo run check typecheck test clippy test:rust test:e2e",
     "test:e2e": "turbo run test:e2e",
-    "test:e2e:app": "turbo run test:e2e:app"
+    "test:e2e:app": "turbo run test:e2e:app",
+    "test:e2e:measure": "turbo run test:e2e:measure"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

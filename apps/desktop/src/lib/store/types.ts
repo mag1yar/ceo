@@ -26,3 +26,51 @@ export type AgentSession = { id: string, projectId: string, nodeId: string, role
  */
 
 parent: string | null, };
+
+/**
+
+ * Totals of one session over all its transcripts (a `/clear` starts a new one).
+
+ */
+
+export type Usage = { sessionId: string, projectId: string, nodeId: string, role: string, 
+
+/**
+
+ * The node's title when it was first recorded.
+
+ */
+
+task: string, input: number, output: number, cacheRead: number, cacheWrite1h: number, cacheWrite5m: number, 
+
+/**
+
+ * The first turn's prompt: input, cache read and cache write.
+
+ */
+
+firstPrompt: number | null, 
+
+/**
+
+ * Turns that came after an idle gap longer than the cache TTL and read next to nothing from it.
+
+ */
+
+idleMisses: Array<{ gap: string, ttl: string, tokens: number }>, compactions: number, 
+
+/**
+
+ * The last turn's prompt size, the context the session holds now.
+
+ */
+
+context: number | null, 
+
+/**
+
+ * The CEO's context at each wave boundary, just before the app cleared it.
+
+ */
+
+waveContexts: Array<number>, };

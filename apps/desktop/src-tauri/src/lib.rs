@@ -41,6 +41,7 @@ pub fn run() {
             store::board_load,
             store::board_save,
             store::message_list,
+            store::usage::usage_list,
             git::project_is_git,
             terminal::terminal_open,
             terminal::terminal_write,

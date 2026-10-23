@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core"
-import type { Board, BoardChanges, Project } from "./types"
+import type { Board, BoardChanges, Project, Usage } from "./types"
 
 export type * from "./types"
 
@@ -15,4 +15,6 @@ export const store = {
   loadBoard: (projectId: string) => invoke<Board>("board_load", { projectId }),
   saveBoard: (projectId: string, changes: Partial<BoardChanges>) =>
     invoke<void>("board_save", { projectId, changes }),
+  listUsage: (projectId: string) =>
+    invoke<Usage[]>("usage_list", { projectId }),
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Stand-in for `claude` in the hidden app: posts its --settings hooks, honours their answers and speaks MCP to the real shim.
 import { execFileSync, execSync, spawn } from "node:child_process"
-import { readFileSync, writeFileSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 
 const args = process.argv.slice(2)
 const arg = (name) => {
@@ -10,7 +11,7 @@ const arg = (name) => {
 }
 const settings = JSON.parse(readFileSync(arg("--settings"), "utf8"))
 const resumed = arg("--resume") !== undefined
-const id = arg("--resume") ?? arg("--session-id")
+let id = arg("--resume") ?? arg("--session-id")
 const prompt0 = arg("--append-system-prompt") ?? ""
 const role = prompt0.startsWith("You are an executor")
   ? "executor"
@@ -22,18 +23,52 @@ const brief = args.includes("--")
   : undefined
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// A transcript in Claude Code's JSONL shape, one file per session id as a /clear starts a new one.
+const transcripts = `${process.env.HOME}/.claude/projects/stub`
+const transcript = () => `${transcripts}/${id}.jsonl`
+let turns = 0
+// One turn: the first writes the 1h cache, later ones read it; a response spans two lines with one message id.
+function turn() {
+  const first = turns++ === 0
+  const usage = {
+    input_tokens: first ? 3 : 2,
+    cache_creation_input_tokens: first ? 6500 : 300,
+    cache_read_input_tokens: first ? 11300 : 17800 + turns * 300,
+    output_tokens: 40,
+    cache_creation: {
+      ephemeral_1h_input_tokens: first ? 6500 : 300,
+      ephemeral_5m_input_tokens: 0,
+    },
+  }
+  const line = {
+    type: "assistant",
+    timestamp: new Date().toISOString(),
+    sessionId: id,
+    message: { id: `msg_${randomUUID()}`, role: "assistant", usage },
+  }
+  mkdirSync(transcripts, { recursive: true })
+  appendFileSync(transcript(), `${JSON.stringify(line)}\n`.repeat(2))
+}
+
+// What SessionStart answered, which the stub answers questions from.
+let primed = ""
+
 // A hook's answer, parsed: http hooks answer in the body, command hooks on stdout.
 async function post(event, extra = {}) {
+  if (event === "Stop" && !extra.stop_hook_active) turn()
   const body = JSON.stringify({
     session_id: id,
+    transcript_path: transcript(),
     cwd: process.cwd(),
     hook_event_name: event,
     ...extra,
   })
   let answer
   for (const hook of settings.hooks[event]?.[0]?.hooks ?? []) {
-    if (hook.type === "command") execSync(hook.command, { input: body })
-    else {
+    if (hook.type === "command") {
+      const text = execSync(hook.command, { input: body }).toString()
+      if (text.trim()) answer = JSON.parse(text)
+    } else {
       const text = await fetch(hook.url, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...hook.headers },
@@ -256,6 +291,29 @@ const lead = {
   },
 }
 
+async function start(source) {
+  const answer = await post("SessionStart", { source })
+  primed = answer?.hookSpecificOutput?.additionalContext ?? ""
+}
+
+// /clear: a new session id, and SessionStart brings the prime again.
+async function clear() {
+  id = randomUUID()
+  turns = 0
+  await start("clear")
+  say(`Cleared · ${id} · prime ${primed.length} chars`)
+}
+
+// A question is answered from the prime alone: its core.md lines and the wave state.
+async function answer(line) {
+  await prompt(line)
+  const core = primed.split("## core.md\n")[1]?.split("\n## ")[0] ?? ""
+  const wave = primed.split("\n").find((l) => l.startsWith("Wave state:"))
+  for (const l of [...core.split("\n"), wave ?? "No wave state"])
+    if (l.trim()) say(`> ${l}`)
+  await stop()
+}
+
 async function execute() {
   await prompt(brief)
   let r = await tool("ask", { body: "Which file should I write?" })
@@ -283,7 +341,7 @@ async function execute() {
 out(
   `  ${process.cwd()}\r\n  deny: ${settings.permissions.deny.join(", ")}\r\n\x1b[38;2;217;119;87m✻\x1b[0m \x1b[1mStub Claude\x1b[0m · ${resumed ? "resumed" : "new"} · ${id}\r\n❯ `
 )
-await post("SessionStart", { source: resumed ? "resume" : "startup" })
+await start(resumed ? "resume" : "startup")
 if (shim) {
   await rpc("initialize", {
     protocolVersion: "2025-06-18",
@@ -319,6 +377,8 @@ process.stdin.on("data", async (text) => {
   for (const line of text.split(/[\r\n]+/).filter((l) => l.trim())) {
     const ws = line.split(/\s+/).filter(Boolean)
     if (line.includes("mcp__ceo__inbox")) await pointer(line)
+    else if (line.trim() === "/clear") await clear()
+    else if (role === "ceo" && line.trim().endsWith("?")) await answer(line)
     else if (ws.every((w) => w in words)) for (const w of ws) await words[w]()
     else if (role === "ceo" && shim) await task(line.trim())
   }

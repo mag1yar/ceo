@@ -30,7 +30,7 @@ fn migrates_from_zero_and_is_idempotent() {
     let v: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(v, 4);
+    assert_eq!(v, 5);
     let mut tables: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .unwrap()
@@ -47,7 +47,9 @@ fn migrates_from_zero_and_is_idempotent() {
             "boards",
             "messages",
             "projects",
-            "sessions"
+            "sessions",
+            "transcript_cursors",
+            "usage"
         ]
     );
     drop(conn);
@@ -175,6 +177,7 @@ fn ts_types_match_rust() {
         Board::export_to_string(&cfg),
         BoardChanges::export_to_string(&cfg),
         AgentSession::export_to_string(&cfg),
+        Usage::export_to_string(&cfg),
     ]
     .map(|r| r.unwrap())
     .join("\n")

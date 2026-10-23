@@ -1,12 +1,14 @@
 mod messages;
 mod migrations;
 mod types;
+pub mod usage;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 pub use types::*;
+pub use usage::Usage;
 
 pub struct Store(Mutex<Connection>);
 

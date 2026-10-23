@@ -1064,8 +1064,8 @@ fn spawned_executor_reports_is_accepted_and_leaves_its_branch() {
         "{args}"
     );
     assert!(
-        args.ends_with("--model haiku --effort low -- - write hello.txt;\n"),
-        "model from the CEO's node, the brief's trailing ; kept: {args}"
+        args.ends_with("--model sonnet --effort low -- - write hello.txt;\n"),
+        "model from the executor profile, not the CEO's node, the brief's trailing ; kept: {args}"
     );
     let mcp = std::fs::read_to_string(s.session_dir(&exec.id).join("mcp.json")).unwrap();
     let mcp: serde_json::Value = serde_json::from_str(&mcp).unwrap();
@@ -1570,4 +1570,386 @@ fn a_lead_spawns_its_team_off_its_branch_and_is_retired_after_it() {
     );
     assert!(board.edges.is_empty());
     app.state::<Sessions>().remove(&store, &ceo).unwrap();
+}
+
+// #21: memory, prime, token accounting and profiles.
+
+const FIXTURE: &str = include_str!("fixtures/transcript.jsonl");
+const RESUMED: &str = include_str!("fixtures/transcript-resumed.jsonl");
+
+#[test]
+fn transcript_parser_counts_every_field_on_the_fixture() {
+    assert_eq!(
+        usage::millis("2026-10-23T10:00:02.500Z"),
+        Some(1_792_749_602_500)
+    );
+    assert_eq!(usage::millis("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(usage::millis("1970-01-01T00:00:01.5Z"), Some(1500));
+    assert_eq!(usage::millis("1970-01-01T00:00:01.123456Z"), Some(1123));
+    let mut cur = usage::Cursor::default();
+    let d = usage::parse(FIXTURE.as_bytes(), &mut cur);
+    // msg_01 spans two lines with the same usage and counts once.
+    assert_eq!(
+        (d.input, d.output, d.cache_read),
+        (3 + 5 + 2 + 4, 100 + 200 + 50 + 80, 11000 + 18000 + 9000)
+    );
+    assert_eq!((d.cache_1h, d.cache_5m), (7000 + 500 + 12000, 3000));
+    assert_eq!(d.first_prompt, Some(3 + 11000 + 7000));
+    assert_eq!(d.compactions, 1);
+    // 18 minutes after a 5m write, nothing read: an idle miss; 30 s and 90 s gaps are not.
+    assert_eq!(
+        d.misses,
+        vec![json!({"gap": "18m", "ttl": "5m", "tokens": 12004})]
+    );
+    assert_eq!(d.context, Some(12004));
+    assert_eq!(cur.offset, FIXTURE.len() as u64);
+    assert!(cur.ttl_1h, "the last write was 1h");
+
+    // The resumed session appends to the same file: only the new lines count, the first prompt stays.
+    let all = format!("{FIXTURE}{RESUMED}");
+    let d = usage::parse(&all.as_bytes()[cur.offset as usize..], &mut cur);
+    assert_eq!((d.input, d.output, d.cache_read), (7, 100, 15200));
+    assert_eq!((d.cache_1h, d.cache_5m), (15000, 0));
+    assert_eq!(d.first_prompt, None);
+    assert_eq!(d.compactions, 0);
+    assert_eq!(
+        d.misses,
+        vec![json!({"gap": "1h40m", "ttl": "1h", "tokens": 15106})]
+    );
+    assert_eq!(d.context, Some(15101));
+    assert_eq!(cur.offset, all.len() as u64);
+
+    // A line still being written is left for the next read.
+    let mut cur = usage::Cursor::default();
+    let cut = FIXTURE.len() - 10;
+    let d = usage::parse(&FIXTURE.as_bytes()[..cut], &mut cur);
+    assert_eq!(
+        d.context,
+        Some(2 + 9000 + 3000),
+        "msg_04 is not complete yet"
+    );
+    let d = usage::parse(&FIXTURE.as_bytes()[cur.offset as usize..], &mut cur);
+    assert_eq!((d.input, d.misses.len()), (4, 1));
+}
+
+fn ceo_board(store: &Store, project: &str, note: Option<&str>) {
+    let mut nodes = vec![BoardNode {
+        id: "ceo".into(),
+        kind: "ceo".into(),
+        x: 0.0,
+        y: 0.0,
+        width: None,
+        height: None,
+        data: json!({"name": "CEO", "model": "opus"}),
+        z: 0,
+    }];
+    let mut edges = vec![];
+    if let Some(text) = note {
+        nodes.push(BoardNode {
+            id: "note".into(),
+            kind: "note".into(),
+            data: json!({"text": text, "color": "yellow"}),
+            ..nodes[0].clone()
+        });
+        edges.push(crate::store::BoardEdge {
+            id: "e".into(),
+            source: "note".into(),
+            target: "ceo".into(),
+            data: json!({}),
+        });
+    }
+    let changes = BoardChanges {
+        upsert_nodes: nodes,
+        upsert_edges: edges,
+        ..Default::default()
+    };
+    store.save_board(project, &changes).unwrap();
+}
+
+#[test]
+fn usage_is_read_from_the_stored_offset_and_kept_per_session() {
+    let d = tempfile::tempdir().unwrap();
+    let app = mock_app(d.path(), Err("unused".into()), "unused");
+    let store = app.state::<Store>();
+    let p = store.create_project("p", "/tmp").unwrap();
+    ceo_board(&store, &p.id, None);
+    let ceo = session("ceo", &p.id, "ceo", None);
+    store.insert_session(&ceo).unwrap();
+    let path = d.path().join("t.jsonl");
+    let file = path.to_str().unwrap();
+    std::fs::write(&path, FIXTURE).unwrap();
+    let u = usage::record(app.handle(), &ceo, file).unwrap();
+    assert_eq!((u.input, u.cache_write_1h, u.compactions), (14, 19500, 1));
+    assert_eq!((u.role.as_str(), u.task.as_str()), ("ceo", "CEO"));
+    // Nothing new, nothing added.
+    assert_eq!(usage::record(app.handle(), &ceo, file).unwrap(), u);
+    // Half a line, then the rest: counted once it is complete.
+    let (head, tail) = RESUMED.split_at(RESUMED.len() - 20);
+    std::fs::write(&path, format!("{FIXTURE}{head}")).unwrap();
+    let mid = usage::record(app.handle(), &ceo, file).unwrap();
+    assert_eq!(mid.input, 14 + 6);
+    std::fs::write(&path, format!("{FIXTURE}{head}{tail}")).unwrap();
+    let u = usage::record(app.handle(), &ceo, file).unwrap();
+    assert_eq!((u.input, u.output, u.cache_read), (21, 530, 53200));
+    assert_eq!(u.first_prompt, Some(18003));
+    assert_eq!(u.idle_misses.len(), 2);
+    assert_eq!(u.context, Some(15101));
+    // A wave boundary records the context the CEO holds then; the row outlives the session.
+    usage::wave_mark(app.handle(), &ceo);
+    store.remove_session(&ceo.id, None).unwrap();
+    let list = store.usage_list(&p.id).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].wave_contexts, vec![15101]);
+    assert_eq!(list[0].session_id, ceo.id);
+}
+
+#[test]
+fn prime_stays_under_the_cap_cutting_details_then_notes_never_core() {
+    let core: String = (0..400)
+        .map(|i| format!("fact {i:03}: the owner wants every wave reported with its gate line\n"))
+        .collect();
+    assert!(core.len() > 20_000);
+    let index: Vec<String> = (0..200)
+        .map(|i| format!("- notes/topic-{i}.md: what we decided about topic {i}"))
+        .collect();
+    let notes = vec![format!("- {}", "board note text ".repeat(400))];
+    let details: Vec<String> = (0..300)
+        .map(|i| format!("- Executor {i} (executor): working, Running Bash, branch ceo/exec-{i}"))
+        .collect();
+    let snapshot = "Wave state: 300 executors live, 2 unaccepted messages for you.";
+    let p = prime::ceo(
+        "/data/memory/p",
+        &core,
+        snapshot,
+        index.clone(),
+        notes.clone(),
+        details.clone(),
+    );
+    assert!(p.chars().count() <= prime::CAP, "{}", p.len());
+    // core.md is cut only by its own cap: every whole line of its first 8000 characters is there.
+    let kept: String = core.chars().take(memory::CORE_CAP).collect();
+    for line in kept.lines().take(kept.lines().count() - 1) {
+        assert!(p.contains(line), "{line}");
+    }
+    assert!(!p.contains("fact 399"));
+    assert!(p.contains("/data/memory/p") && p.contains(snapshot));
+    assert!(!p.contains("Executor 299"), "details go first");
+
+    // With a small core, notes fit and the details are what gets cut.
+    let p = prime::ceo(
+        "/m",
+        "one fact",
+        snapshot,
+        index[..5].to_vec(),
+        notes,
+        details,
+    );
+    assert!(p.chars().count() <= prime::CAP);
+    assert!(p.contains("one fact") && p.contains("topic-4.md") && p.contains("board note text"));
+    assert!(p.contains("Executor 0 ") && !p.contains("Executor 299"));
+    assert!(
+        prime::fit(
+            &[("## Board notes linked to you".into(), vec![])],
+            prime::CAP
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn session_start_takes_the_new_id_and_answers_with_the_prime_and_stop_commits_memory() {
+    let d = tempfile::tempdir().unwrap();
+    let app = mock_app(d.path(), Err("unused".into()), "unused");
+    let store = app.state::<Store>();
+    let p = store.create_project("p", "/tmp").unwrap();
+    ceo_board(&store, &p.id, Some("Ship the memory slice first"));
+    let mut ceo = session("ceo", &p.id, "ceo", None);
+    ceo.claude_session_id = "before-clear".into();
+    store.insert_session(&ceo).unwrap();
+    let mem = memory::dir(app.handle(), &p.id);
+    std::fs::create_dir_all(mem.join("notes")).unwrap();
+    std::fs::write(mem.join("core.md"), "The owner's codeword is PLUM.\n").unwrap();
+    std::fs::write(mem.join("notes/waves.md"), "# How waves are cut\nbody").unwrap();
+
+    let answer = on_hook(
+        app.handle(),
+        &ceo,
+        &json!({"hook_event_name": "SessionStart", "source": "clear", "session_id": "after-clear"}),
+    );
+    let answer: serde_json::Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(
+        answer["hookSpecificOutput"]["hookEventName"],
+        "SessionStart"
+    );
+    let text = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    for want in [
+        "The owner's codeword is PLUM.",
+        "Wave state: no executors live, 0 unaccepted messages",
+        "- notes/waves.md: How waves are cut",
+        "- Ship the memory slice first",
+        "- CEO (ceo): working",
+        &mem.to_string_lossy(),
+    ] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    assert_eq!(
+        store.session(&ceo.id).unwrap().unwrap().claude_session_id,
+        "after-clear",
+        "a later --resume resumes the cleared conversation"
+    );
+    // The same id again changes nothing.
+    let row = store.session(&ceo.id).unwrap().unwrap();
+    on_hook(
+        app.handle(),
+        &row,
+        &json!({"hook_event_name": "SessionStart", "source": "resume", "session_id": "after-clear"}),
+    );
+    assert_eq!(
+        store.session(&ceo.id).unwrap().unwrap().claude_session_id,
+        "after-clear"
+    );
+
+    // An executor without linked notes gets no context at all.
+    let exec = session("exec", &p.id, "executor", Some("ceo"));
+    store.insert_session(&exec).unwrap();
+    assert_eq!(
+        on_hook(
+            app.handle(),
+            &exec,
+            &json!({"hook_event_name": "SessionStart", "source": "startup", "session_id": "x"})
+        ),
+        ""
+    );
+
+    // The CEO's Stop commits its memory edits and records the turn's tokens.
+    let path = d.path().join("ceo.jsonl");
+    std::fs::write(&path, FIXTURE).unwrap();
+    on_hook(
+        app.handle(),
+        &row,
+        &json!({"hook_event_name": "Stop", "stop_hook_active": true, "transcript_path": path}),
+    );
+    wait_until("the memory commit", || {
+        Command::new("git")
+            .arg("-C")
+            .arg(&mem)
+            .args(["log", "--format=%s"])
+            .output()
+            .unwrap()
+            .stdout
+            == b"memory: core.md, notes/waves.md\n"
+    });
+    assert_eq!(git(&mem, &["config", "--local", "user.name"]), "CEO memory");
+    std::fs::write(
+        mem.join("core.md"),
+        "The owner's codeword is PLUM.\nNew fact.\n",
+    )
+    .unwrap();
+    on_hook(
+        app.handle(),
+        &row,
+        &json!({"hook_event_name": "Stop", "stop_hook_active": true}),
+    );
+    wait_until("the second commit", || {
+        git(&mem, &["rev-list", "--count", "HEAD"]) == "2"
+    });
+    assert_eq!(git(&mem, &["log", "-1", "--format=%s"]), "memory: core.md");
+    assert_eq!(store.usage(&ceo.id).unwrap().unwrap().input, 14);
+}
+
+#[test]
+fn profiles_default_override_key_by_key_and_follow_precedence() {
+    let d = tempfile::tempdir().unwrap();
+    let p = profile::load(d.path());
+    let get = |role, key| profile::get(&p, role, key);
+    assert_eq!(
+        (get("ceo", "model"), get("ceo", "effort")),
+        (Some("opus".into()), Some("medium".into()))
+    );
+    assert_eq!(
+        (get("lead", "model"), get("lead", "effort")),
+        (Some("sonnet".into()), Some("high".into()))
+    );
+    assert_eq!(
+        (get("executor", "model"), get("executor", "effort")),
+        (Some("sonnet".into()), None)
+    );
+    assert_eq!(get("mechanical", "model"), Some("haiku".into()));
+    assert_eq!(get("review", "model"), Some("opus".into()));
+    assert!(
+        profile::advice(&p).contains("haiku for mechanical work")
+            && profile::advice(&p).contains("opus for reviews")
+    );
+
+    std::fs::write(
+        d.path().join("profiles.json"),
+        r#"{"ceo": {"effort": "high"}, "mechanical": {"model": "sonnet"}}"#,
+    )
+    .unwrap();
+    let p = profile::load(d.path());
+    assert_eq!(
+        profile::get(&p, "ceo", "model"),
+        Some("opus".into()),
+        "untouched keys stay"
+    );
+    assert_eq!(profile::get(&p, "ceo", "effort"), Some("high".into()));
+    assert!(profile::advice(&p).contains("sonnet for mechanical work"));
+
+    let s = |a: Option<&str>, b: Option<&str>| (a.map(String::from), b.map(String::from));
+    assert_eq!(
+        profile::pick(&p, "ceo", &json!({}), None),
+        s(Some("opus"), Some("high"))
+    );
+    assert_eq!(
+        profile::pick(&p, "ceo", &json!({}), Some("sonnet")),
+        s(Some("sonnet"), Some("high")),
+        "the node beats the profile"
+    );
+    assert_eq!(
+        profile::pick(
+            &p,
+            "executor",
+            &json!({"model": "haiku", "effort": "low"}),
+            Some("opus")
+        ),
+        s(Some("haiku"), Some("low")),
+        "spawn arguments beat the node"
+    );
+    assert_eq!(
+        profile::pick(&p, "executor", &json!({"model": null}), None),
+        s(Some("sonnet"), None)
+    );
+}
+
+#[test]
+fn the_ceo_launches_with_its_profile_the_advice_and_no_idle_compaction() {
+    let sock = TestSocket(format!("ceo-test-prof-{}", std::process::id()));
+    let d = tempfile::tempdir().unwrap();
+    let app = mock_app(d.path(), Ok(sleeper(d.path())), &sock.0);
+    let (s, store) = (app.state::<Sessions>(), app.state::<Store>());
+    let p = store
+        .create_project("p", d.path().to_str().unwrap())
+        .unwrap();
+    let ceo = s.create(&store, &p.id, "ceo", "ceo", None, "ceo").unwrap();
+    s.launch(&ceo, (100, 30), "--session-id").unwrap();
+    let args = wait_read(&d.path().join("args"));
+    assert!(
+        args.trim_end().ends_with("--model opus --effort medium"),
+        "{args}"
+    );
+    assert!(
+        args.contains("haiku for mechanical work")
+            && args.contains(
+                "Goal, Constraints, Progress, Key Decisions, Next Steps, Critical Context"
+            ),
+        "{args}"
+    );
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(s.session_dir(&ceo.id).join("settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["idleCompaction"], false);
+    s.remove(&store, &ceo).unwrap();
 }

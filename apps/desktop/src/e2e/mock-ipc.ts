@@ -174,6 +174,29 @@ function handle(cmd: string, payload: unknown) {
     case "session_list":
     case "message_list":
       return []
+    // A fixed made-up session total per agent node, so the inspector's token row has something to show.
+    case "usage_list":
+      return board(a.projectId)
+        .nodes.filter((n) =>
+          ["ceo", "lead", "member", "executor"].includes(n.type)
+        )
+        .map((n) => ({
+          sessionId: `usage-${n.id}`,
+          projectId: a.projectId,
+          nodeId: n.id,
+          role: n.type,
+          task: (n.data as { name?: string }).name ?? "",
+          input: 1200,
+          output: 48_300,
+          cacheRead: 2_350_000,
+          cacheWrite1h: 182_000,
+          cacheWrite5m: 4_100,
+          firstPrompt: 21_206,
+          idleMisses: [],
+          compactions: 0,
+          context: 64_000,
+          waveContexts: [],
+        }))
     // status.ts listens for session status; the mock never emits any.
     case "plugin:event|listen":
       return 0

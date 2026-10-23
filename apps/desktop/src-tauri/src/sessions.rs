@@ -3,9 +3,13 @@
 mod bus;
 mod guard;
 mod hooks;
+mod memory;
+mod prime;
+mod profile;
 pub mod shim;
 mod tmux;
 mod trust;
+mod usage;
 mod worktree;
 
 use crate::store::{AgentSession, Store};
@@ -281,14 +285,29 @@ impl Sessions {
     }
 
     fn launch(&self, row: &AgentSession, size: (u16, u16), mode: &str) -> Res<()> {
+        self.launch_as(row, size, mode, None)
+    }
+
+    /// `node_model` is the model set on the node in the UI, below the spawn arguments and above the role's profile.
+    fn launch_as(
+        &self,
+        row: &AgentSession,
+        size: (u16, u16),
+        mode: &str,
+        node_model: Option<&str>,
+    ) -> Res<()> {
         let bins = self.bins()?;
         let dir = self.session_dir(&row.id);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         // Outside the worktree, so the token never lands in the agent's repo.
         let settings = dir.join("settings.json");
         let url = format!("http://127.0.0.1:{}/hook/{}", self.port, row.id);
-        std::fs::write(&settings, hooks::settings(&url, &row.token).to_string())
-            .map_err(|e| e.to_string())?;
+        let mut config = hooks::settings(&url, &row.token);
+        // The app clears the CEO at wave boundaries; idle compaction would summarise it behind the app's back.
+        if row.role == "ceo" {
+            config["idleCompaction"] = false.into();
+        }
+        std::fs::write(&settings, config.to_string()).map_err(|e| e.to_string())?;
         let settings = settings.to_string_lossy();
         // The bus as an MCP server: this binary in shim mode, with the session's own URL and token.
         let mcp = dir.join("mcp.json");
@@ -311,6 +330,15 @@ impl Sessions {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        let profiles = profile::load(&self.dir);
+        let (model, effort) = profile::pick(&profiles, &row.role, &profile, node_model);
+        let mut prompt = bus::role_prompt(&row.role).to_string();
+        if matches!(row.role.as_str(), "ceo" | "lead") {
+            prompt = format!("{prompt}\n\n{}", profile::advice(&profiles));
+        }
+        if row.role == "ceo" {
+            prompt = format!("{prompt}\n\n{}", profile::COMPACTION);
+        }
         // A project at a subfolder of its repo runs claude at the same subfolder of the worktree.
         let cwd = match &row.worktree {
             Some(wt) => Path::new(wt).join(worktree::prefix(&row.repo)),
@@ -332,19 +360,13 @@ impl Sessions {
             "--mcp-config",
             &mcp,
             "--append-system-prompt",
-            bus::role_prompt(&row.role),
+            &prompt,
         ];
-        for flag in ["model", "effort"] {
-            if let Some(v) = profile[flag].as_str() {
-                argv.extend([
-                    if flag == "model" {
-                        "--model"
-                    } else {
-                        "--effort"
-                    },
-                    v,
-                ]);
-            }
+        if let Some(m) = &model {
+            argv.extend(["--model", m]);
+        }
+        if let Some(e) = &effort {
+            argv.extend(["--effort", e]);
         }
         // The brief starts a fresh session only; a resumed one already has it.
         if let Some(brief) = profile["brief"].as_str().filter(|_| mode == "--session-id") {
@@ -359,8 +381,9 @@ impl Sessions {
         // Nothing is typed into it until its SessionStart says the prompt is up.
         store.set_session_status(&row.id, "idle", "Starting")?;
         // Only a session that got a prompt has a transcript; --resume of any other exits at once.
+        let node_model = profile::node_model(store, row);
         for mode in ["--resume", "--session-id"] {
-            let _ = self.launch(row, size, mode);
+            let _ = self.launch_as(row, size, mode, node_model.as_deref());
             let deadline = Instant::now() + Duration::from_secs(2);
             while tmux.has(&row.tmux_name) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(100));
@@ -491,7 +514,12 @@ fn on_hook<R: Runtime>(
         .insert(row.id.clone(), Instant::now());
     let name = event["hook_event_name"].as_str().unwrap_or("");
     let mut status = hooks::status_for(event);
+    // Before the status moves, so a wave reset waiting for idle reads this turn's tokens.
+    if matches!(name, "Stop" | "SessionEnd") {
+        usage::after_turn(app, row, event);
+    }
     let answer = match name {
+        "SessionStart" => prime::session_start(app, row, event),
         "PreToolUse" if event["tool_name"] == "Bash" => event["tool_input"]["command"]
             .as_str()
             .and_then(guard::deny)
@@ -673,7 +701,12 @@ pub fn session_ensure<R: Runtime>(
                 let row = s.create(&store, &project_id, &node_id, "ceo", None, "ceo")?;
                 // The node switches off the mock pool now, not at the first hook (onboarding sends none).
                 report(&app, &project_id, &node_id, &row.status, &row.action);
-                s.launch(&row, (cols, rows), "--session-id")?;
+                s.launch_as(
+                    &row,
+                    (cols, rows),
+                    "--session-id",
+                    profile::node_model(&store, &row).as_deref(),
+                )?;
                 row
             }
         };

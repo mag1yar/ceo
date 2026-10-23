@@ -609,8 +609,9 @@ fn spawn_executor<R: Runtime>(
         .iter()
         .find(|n| n.id == ceo.node_id)
         .ok_or("the spawning node is gone")?;
-    // The executor runs the model it is given, else the CEO's own.
-    let model = match model.or(ceo_node.data["model"].as_str()) {
+    // The session runs the model it is given, else its role's profile.
+    let fallback = super::profile::get(&super::profile::load(&s.dir), kind, "model");
+    let model = match model.or(fallback.as_deref()) {
         Some(m) if MODELS.contains(&m) => m,
         Some(m) => return Err(format!("model {m} is not one of {}", MODELS.join(", "))),
         None => "sonnet",
@@ -771,6 +772,7 @@ pub fn retire<R: Runtime>(
         emit_board(&app, &exec.project_id, &changes);
         report(&app, &exec.project_id, &exec.node_id, "done", &why);
         retiring().remove(&exec.id);
+        super::memory::wave_end(&app, &exec, wait);
     })
 }
 

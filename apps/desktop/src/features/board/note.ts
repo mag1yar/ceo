@@ -36,6 +36,7 @@ export function newNote(center: XYPosition): NoteNode {
     position: { x: center.x - WIDTH / 2, y: center.y - HEIGHT / 2 },
     width: WIDTH,
     height: HEIGHT,
+    ariaLabel: "Note",
     data: { text: "", color: "default" },
   }
 }

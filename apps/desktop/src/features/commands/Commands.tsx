@@ -203,10 +203,7 @@ function ShortcutHelp({
       onOpenChange={onOpenChange}
       onOpenChangeComplete={onOpenChangeComplete}
     >
-      <DialogContent
-        showCloseButton={false}
-        className="gap-3 sm:max-w-md motion-reduce:data-closed:zoom-out-100 motion-reduce:data-open:zoom-in-100"
-      >
+      <DialogContent showCloseButton={false} className="gap-3 sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription className="sr-only">
@@ -259,7 +256,11 @@ function Keys({ shortcut }: { shortcut: Shortcut }) {
   return (
     <KbdGroup aria-label={caps.map((k) => SPOKEN[k] ?? k).join(" ")}>
       {caps.map((k) => (
-        <Kbd key={k} aria-hidden className="dark:bg-foreground/10">
+        <Kbd
+          key={k}
+          aria-hidden
+          className="dark:bg-foreground/10 dark:text-foreground"
+        >
           {k}
         </Kbd>
       ))}

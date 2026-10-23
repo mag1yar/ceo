@@ -9,8 +9,9 @@ import {
   useReactFlow,
   useStoreApi,
 } from "@xyflow/react"
-import { memo, useState } from "react"
-import { floatingEnds, type LinkEdge } from "./link"
+import { memo, useCallback, useState } from "react"
+import { returnFocus, useEnterToEdit } from "./keyboard"
+import { floatingEnds, type LinkEdge, linkLabel } from "./link"
 
 // Subscribes to its two nodes only, so a move re-renders just the edges touching it.
 function useFloatingEnds(source: string, target: string) {
@@ -26,9 +27,12 @@ export const LinkEdgeView = memo(function LinkEdgeView({
   data,
   selected,
 }: EdgeProps<LinkEdge>) {
-  const { updateEdgeData } = useReactFlow()
+  const { updateEdge } = useReactFlow()
   const flow = useStoreApi()
   const [editing, setEditing] = useState(false)
+  const edit = useCallback(() => setEditing(true), [])
+  const [hit, setHit] = useState<SVGPathElement | null>(null)
+  useEnterToEdit(hit, "edge", edit)
   const ends = useFloatingEnds(source, target)
   if (!ends) return null
   const [path, x, y] = getBezierPath(ends)
@@ -36,7 +40,12 @@ export const LinkEdgeView = memo(function LinkEdgeView({
   const finish = (value: string) => {
     setEditing(false)
     const next = value.trim() || undefined
-    if (next !== label) updateEdgeData(id, { label: next })
+    // The name VoiceOver reads follows the label.
+    if (next !== label)
+      updateEdge(id, (e) => ({
+        data: { ...e.data, label: next },
+        ariaLabel: linkLabel(next),
+      }))
   }
   return (
     <>
@@ -68,12 +77,13 @@ export const LinkEdgeView = memo(function LinkEdgeView({
       {/* Wide invisible hit area, so the thin line is easy to select and double-click. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: canvas gesture; the label input is the accessible editor. */}
       <path
+        ref={setHit}
         d={path}
         fill="none"
         stroke="transparent"
         strokeWidth={20}
         className="react-flow__edge-interaction"
-        onDoubleClick={() => setEditing(true)}
+        onDoubleClick={edit}
       />
       {(editing || label) && (
         <EdgeLabelRenderer>
@@ -84,14 +94,16 @@ export const LinkEdgeView = memo(function LinkEdgeView({
             }}
           >
             {editing ? (
-              <LabelEditor text={label ?? ""} onDone={finish} />
+              <LabelEditor id={id} text={label ?? ""} onDone={finish} />
             ) : (
               <button
                 type="button"
+                // The edge itself is the Tab stop; Enter there edits this label.
+                tabIndex={-1}
                 data-slot="edge-label"
                 onClick={() => flow.getState().addSelectedEdges([id])}
-                onDoubleClick={() => setEditing(true)}
-                className="block rounded-md border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-xs"
+                onDoubleClick={edit}
+                className="block rounded-md border bg-background px-1.5 py-0.5 text-xs text-muted-foreground shadow-xs outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               >
                 {label}
               </button>
@@ -149,9 +161,11 @@ const focusAll = (el: HTMLInputElement | null) => {
 }
 
 function LabelEditor({
+  id,
   text,
   onDone,
 }: {
+  id: string
   text: string
   onDone: (text: string) => void
 }) {
@@ -162,9 +176,12 @@ function LabelEditor({
       defaultValue={text}
       placeholder="Label"
       onBlur={(e) => onDone(e.currentTarget.value)}
-      onKeyDown={(e) =>
-        (e.key === "Enter" || e.key === "Escape") && e.currentTarget.blur()
-      }
+      // Focus goes back to the edge, which commits through blur; the edge's own Escape would blur it again.
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" && e.key !== "Escape") return
+        e.stopPropagation()
+        returnFocus("edge", id, e.currentTarget)
+      }}
       className="field-sizing-content min-w-16 rounded-md border border-primary bg-background px-1.5 py-0.5 text-xs outline-none select-text"
     />
   )

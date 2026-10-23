@@ -158,9 +158,11 @@ function ProjectRow({
         >
           <ContextMenuTrigger
             render={
+              // WebKit leaves a button without an explicit tabindex out of the Tab order.
               <button
                 ref={button}
                 type="button"
+                tabIndex={0}
                 aria-current={active ? "page" : undefined}
                 title={project.path}
                 onClick={() => select(project.id)}

@@ -15,6 +15,7 @@ export function newDiagram(center: XYPosition): DiagramNode {
     position: { x: center.x - WIDTH / 2, y: center.y - HEIGHT / 2 },
     width: WIDTH,
     height: HEIGHT,
+    ariaLabel: "Diagram",
     data: { source: EXAMPLE },
   }
 }

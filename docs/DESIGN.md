@@ -50,6 +50,8 @@ All tokens live in `packages/ui/src/styles/globals.css` as Tailwind v4 theme var
 
 Neutral OKLCH greys (chroma 0) plus one accent, a calm system-like blue: `oklch(0.56 0.19 257)` light, `oklch(0.66 0.17 257)` dark. The accent is `--primary`, `--ring` and the text selection; nothing else is coloured except `--destructive`.
 
+Since #11 filled surfaces under white text (`--primary`, `--sidebar-primary`) use `oklch(0.56 0.19 257)` in both themes: the brighter dark accent gave white text 3.1:1, the light one gives 4.8:1 (WCAG AA). `--ring`, `--signal` and `--agent-working` keep the brighter dark accent, where it reads better on dark surfaces. `--destructive` is `oklch(0.52 0.2 27)` light and `oklch(0.78 0.16 22)` dark, so its text clears 4.5:1 on its own 10 to 20% tint. Every text colour pair is checked in both themes by `e2e/a11y.spec.ts`.
+
 | Token | Light | Dark | Use |
 |---|---|---|---|
 | `--background` | white | `oklch(0.215 0 0)` | main area |
@@ -58,7 +60,7 @@ Neutral OKLCH greys (chroma 0) plus one accent, a calm system-like blue: `oklch(
 | `--border` | black 9% | white 9% | hairlines |
 | `--sidebar` | clear | clear | sits on vibrancy |
 | `--sidebar-foreground` | black 85% | white 85% | label colour over the material |
-| `--sidebar-muted-foreground` | black 50% | white 50% | secondary label |
+| `--sidebar-muted-foreground` | black 60% | white 60% | secondary label; 60%, not AppKit's 50%, keeps 11px labels at AA over the material |
 | `--sidebar-accent` | black 6% | white 8% | hover and selected rows |
 
 Text over the material uses translucent label colours, as AppKit does, so it stays legible whatever the wallpaper tint is. Dark mode follows `prefers-color-scheme` (the `dark:` variant is a media query); there is no in-app theme toggle.
@@ -100,6 +102,14 @@ The sidebar collapse animates width and the header inset with `--ease-spring` ov
 
 `prefers-reduced-motion: reduce` sets `--duration-move` to 0: the sidebar snaps, fades remain.
 
+Dialogs, alert dialogs and context menus (#11): fade with a scale from 0.95 (menus also slide 8px from their trigger side) over `--duration-fast` with `--ease-out`, on tw-animate's `enter` and `exit`. Under reduced motion an unlayered rule in `globals.css` resets tw-animate's scale and translate variables, so every popup fades only. Buttons transition only colour, background, border, ring, opacity and the 1px press with `--duration-fast` and `--ease-out`, never `all`.
+
+A note created on the board and the diagram editor panel grow from `scale(0.9)` with opacity 0 (`@starting-style`, `--ease-out`, `--duration-base` for the note, `--duration-fast` for the panel); reduced motion keeps the fade. 0.9, not 0.96 or 0.97, so the entry is visible at normal board zoom. Proven in the real WebKit view by `e2e/app/motion.ts`.
+
+## Focus and keyboard
+
+Set by task #11. Every interactive element shows a ring when focused from the keyboard: Base UI controls their 3px `--ring`/50 ring, board nodes a 2px `--ring` outline 2px out, a focused link a 3px stroke, plain buttons (project rows, note colours, link labels) a 2px outline. A link's label button is not a Tab stop: the link is, and Enter there edits the label. WebKit leaves a `<button>` without an explicit `tabindex` out of the Tab order, so plain buttons carry `tabIndex={0}` as Base UI's do. Board items have names for VoiceOver: an agent is "name, role", then "Note", "Diagram", "Link: label" (it follows edits), "Team line". Enter on a focused note, diagram or link opens its editor (the keyboard twin of the double-click); Escape commits and hands the keyboard back to the item. Overview terminals are read-only and stay out of the Tab order until focus mode.
+
 Board items the bus adds and removes (#19): a spawned executor's visual root enters from `scale(0.9)` and opacity 0 with `--ease-out` over `--duration-slow` (a CSS animation on the `spawned` class, so the root keeps its own size transitions), its link fades in alongside. On retire it leaves to `scale(0.9)` and opacity 0 with `--ease-out` over `--duration-base` (Web Animations from `useSpawned`), its link fades with it, and both stay on the board, inert, until that animation's `finished`. Reduced motion: opacity only, both ways.
 
 Signal merge on accept (#19): the waiting dot moves the last 14 screen px into the receiver's outline while it stretches along the path (1.5 by 0.7 at the outline) and shrinks to 0.4 by 0.3, fading out over `--duration-base` with `--ease-in-out`; as it touches the outline (60% in) the receiver's outline answers with one pulse, a 2px `--signal` ring that rises to 50% opacity and grows to `scale(1.03)` while it fades, `--ease-out` over `--duration-slow`. Both are Web Animations on `transform` and `opacity`, no React render per frame. Once accepted the signal keeps its last path, so the merge plays out even when the sender leaves the board meanwhile. Reduced motion: no travel, stretch or ring growth, the dot and the ring fade only.
@@ -112,7 +122,7 @@ Set by task #10. One registry, `apps/desktop/src/features/commands/registry.ts`,
 - The menu bar is built in JS with `@tauri-apps/api/menu`: the standard App, Edit and Window menus, plus one menu per registry group. Only Cmd shortcuts become accelerators. Undo and Redo stay the native Edit items so text fields keep their own undo.
 - Measured in the hidden app (#10): WebKit gives the page the keydown first; a cancelled key never reaches the menu, an uncancelled one is handed on to the menu afterwards. A menu action therefore stands down when the page saw its keys in the last 500ms.
 - Cmd+K opens the palette from a focused terminal too, and focus returns to the terminal when it closes. The terminal has no local clear: tmux owns its screen, and a local clear would blank it until the next redraw.
-- The palette opens and closes without animation (it is opened by keyboard many times a day) and moving through its rows is instant. The help dialog keeps the standard 100ms fade and drops its scale under reduced motion.
+- The palette opens and closes without animation (it is opened by keyboard many times a day) and moving through its rows is instant. The help dialog keeps the standard dialog motion (see Motion).
 
 ## Message signals
 

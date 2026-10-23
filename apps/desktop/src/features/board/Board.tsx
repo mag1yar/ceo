@@ -77,7 +77,7 @@ export function Board({ projectId }: { projectId: string }) {
     <div data-slot="board" className="relative min-h-0 flex-1 self-stretch">
       {failed ? (
         <p className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">
-          Could not load the board
+          Could not load the board. Restart CEO to try again.
         </p>
       ) : (
         board && (
@@ -332,7 +332,7 @@ function Canvas({
       onMoveEnd={onMoveEnd}
       onBeforeDelete={onBeforeDelete}
       attributionPosition="bottom-left"
-      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)] [--xy-edge-stroke:var(--muted-foreground)] [--xy-edge-stroke-selected:var(--primary)] [--xy-edge-stroke-width:1.5] [--xy-connectionline-stroke:var(--primary)] [--xy-connectionline-stroke-width:1.5] [&_.react-flow\_\_node:has([data-focused])]:z-100000!"
+      className="[--xy-attribution-background-color:transparent] [--xy-selection-background-color:color-mix(in_oklch,var(--primary)_8%,transparent)] [--xy-selection-border:1px_solid_color-mix(in_oklch,var(--primary)_60%,transparent)] [--xy-edge-stroke:var(--muted-foreground)] [--xy-edge-stroke-selected:var(--primary)] [--xy-edge-stroke-width:1.5] [--xy-connectionline-stroke:var(--primary)] [--xy-connectionline-stroke-width:1.5] [&_.react-flow\_\_node:has([data-focused])]:z-100000! [&_.react-flow\_\_attribution_a]:text-muted-foreground! [&_.react-flow\_\_edge:focus-visible_.react-flow\_\_edge-path]:stroke-3! [&_.react-flow\_\_node:focus-visible]:rounded-lg [&_.react-flow\_\_node:focus-visible]:outline-2 [&_.react-flow\_\_node:focus-visible]:outline-offset-2 [&_.react-flow\_\_node:focus-visible]:outline-ring"
     >
       <DotGrid />
       <ZoomControls />
@@ -386,6 +386,7 @@ function ZoomControls() {
         variant="ghost"
         size="icon-sm"
         aria-label="Zoom out"
+        title="Zoom out"
         onClick={() => rf.zoomOut(options())}
       >
         <MinusIcon />
@@ -393,7 +394,9 @@ function ZoomControls() {
       <Button
         variant="ghost"
         size="sm"
-        aria-label="Zoom to 100%"
+        // The visible percentage leads the name, so voice control can say what it sees.
+        aria-label={`${Math.round(zoom * 100)}%, zoom to 100%`}
+        title="Zoom to 100% (⌘0)"
         className="w-13 px-0 tabular-nums"
         onClick={() => rf.zoomTo(1, options())}
       >
@@ -403,6 +406,7 @@ function ZoomControls() {
         variant="ghost"
         size="icon-sm"
         aria-label="Zoom in"
+        title="Zoom in"
         onClick={() => rf.zoomIn(options())}
       >
         <PlusIcon />
@@ -411,6 +415,7 @@ function ZoomControls() {
         variant="ghost"
         size="icon-sm"
         aria-label="Fit board"
+        title="Fit board (⇧1)"
         onClick={() => rf.fitView(options())}
       >
         <CornersOutIcon />

@@ -1,14 +1,13 @@
 import { PlantIcon } from "@phosphor-icons/react"
 import { Button } from "@workspace/ui/components/button"
 import {
-  type Node,
   type OnSelectionChangeFunc,
   Panel,
   useOnSelectionChange,
   useReactFlow,
 } from "@xyflow/react"
 import { type ReactNode, useCallback, useEffect, useState } from "react"
-import { toEdge } from "@/features/board/link"
+import { toEdge, toNode } from "@/features/board/link"
 import { store, type Usage } from "@/lib/store"
 import { StatusIcon } from "./AgentNode"
 import { useFocusedId } from "./AgentTerminals"
@@ -167,13 +166,7 @@ export function SeedTeam({ projectId }: { projectId: string }) {
     } finally {
       setBusy(false)
     }
-    const nodes: Node[] = team.nodes.map((n) => ({
-      id: n.id,
-      type: n.type,
-      position: { x: n.x, y: n.y },
-      data: n.data as Record<string, unknown>,
-      zIndex: n.z,
-    }))
+    const nodes = team.nodes.map(toNode)
     rf.addNodes(nodes)
     rf.addEdges(team.edges.map(toEdge))
     rf.fitView({ nodes })

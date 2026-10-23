@@ -40,8 +40,11 @@ export const NodeTerminal = memo(function NodeTerminal({
   }, [session])
 
   useEffect(() => {
-    if (!session || !focused) return
+    if (!session) return
     const { term } = session
+    // Overview terminals are read-only, so their input stays out of the Tab order.
+    if (term.textarea) term.textarea.tabIndex = focused ? 0 : -1
+    if (!focused) return
     term.options.disableStdin = false
     // shortcut: WebKit keeps about 16 WebGL contexts, so only the focused terminal holds one.
     let webgl: WebglAddon | undefined

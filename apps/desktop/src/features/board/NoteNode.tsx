@@ -5,8 +5,16 @@ import {
   NodeToolbar,
   useReactFlow,
 } from "@xyflow/react"
-import { memo, type ReactNode, useCallback, useEffect, useState } from "react"
+import {
+  memo,
+  type ReactNode,
+  type Ref,
+  useCallback,
+  useEffect,
+  useState,
+} from "react"
 import Markdown, { type Components } from "react-markdown"
+import { returnFocus, useEnterToEdit } from "./keyboard"
 import { NodeHandles } from "./NodeHandles"
 import {
   freshNotes,
@@ -28,13 +36,20 @@ export const NoteNodeView = memo(function NoteNodeView({
     freshNotes.delete(id)
   }, [id])
   const edit = useCallback(() => setEditing(true), [])
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null)
+  useEnterToEdit(frame, "node", edit)
   // One commit per editing session, so undo steps over the whole edit.
   const finish = (text: string) => {
     setEditing(false)
     if (text !== data.text) updateNodeData(id, { text })
   }
   return (
-    <NoteFrame color={data.color} selected={selected} fresh={fresh}>
+    <NoteFrame
+      ref={setFrame}
+      color={data.color}
+      selected={selected}
+      fresh={fresh}
+    >
       <NodeResizer
         isVisible={selected}
         minWidth={140}
@@ -49,7 +64,7 @@ export const NoteNodeView = memo(function NoteNodeView({
         }
       />
       {editing ? (
-        <NoteEditor text={data.text} onDone={finish} />
+        <NoteEditor id={id} text={data.text} onDone={finish} />
       ) : (
         <NoteView text={data.text} onEdit={edit} />
       )}
@@ -59,11 +74,13 @@ export const NoteNodeView = memo(function NoteNodeView({
 })
 
 function NoteFrame({
+  ref,
   color,
   selected,
   fresh,
   children,
 }: {
+  ref: Ref<HTMLDivElement>
   color: NoteColor
   selected: boolean
   fresh: boolean
@@ -71,13 +88,14 @@ function NoteFrame({
 }) {
   return (
     <div
+      ref={ref}
       data-color={color}
       className={cn(
         "group size-full rounded-lg border text-sm text-foreground shadow-xs",
         NOTE_BG[color] ?? NOTE_BG.default,
         selected && "border-primary ring-1 ring-primary",
         fresh &&
-          "transition-[opacity,scale] duration-(--duration-base) ease-out starting:scale-97 starting:opacity-0 motion-reduce:starting:scale-100"
+          "transition-[opacity,scale] duration-(--duration-base) ease-out starting:scale-90 starting:opacity-0 motion-reduce:starting:scale-100"
       )}
     >
       {children}
@@ -107,7 +125,7 @@ const NoteView = memo(function NoteView({
       {text ? (
         <Markdown components={MARKDOWN}>{text}</Markdown>
       ) : (
-        <p className="text-muted-foreground">Double-click to write</p>
+        <p className="text-foreground/70">Double-click to write</p>
       )}
     </div>
   )
@@ -120,9 +138,11 @@ const focusEnd = (el: HTMLTextAreaElement | null) => {
 }
 
 function NoteEditor({
+  id,
   text,
   onDone,
 }: {
+  id: string
   text: string
   onDone: (text: string) => void
 }) {
@@ -132,7 +152,10 @@ function NoteEditor({
       aria-label="Note text"
       defaultValue={text}
       onBlur={(e) => onDone(e.currentTarget.value)}
-      onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
+      // Focus goes back to the note, which commits the edit through blur and keeps the keyboard on the board.
+      onKeyDown={(e) =>
+        e.key === "Escape" && returnFocus("node", id, e.currentTarget)
+      }
       className="nodrag nopan nowheel size-full resize-none bg-transparent px-3 py-2 font-mono text-xs leading-5 outline-none select-text"
     />
   )
@@ -154,11 +177,12 @@ function NoteColors({
         <button
           key={c}
           type="button"
+          tabIndex={0}
           aria-label={`${c} colour`}
           aria-pressed={c === value}
           onClick={() => onChange(c)}
           className={cn(
-            "size-5 rounded-full border transition-transform duration-(--duration-fast) ease-out active:scale-90",
+            "size-5 rounded-full border transition-transform duration-(--duration-fast) ease-out outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-90",
             NOTE_BG[c],
             c === value &&
               "ring-2 ring-primary ring-offset-1 ring-offset-popover"

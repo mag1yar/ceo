@@ -6,6 +6,7 @@ import {
   Position,
   type XYPosition,
 } from "@xyflow/react"
+import { ROLE_LABEL, ROLES, type Role } from "@/features/agents/agent"
 import type { BoardEdge, BoardNode } from "@/lib/store"
 
 // `kind` tells plain links from later edge kinds; old links may still carry handle ids, which nothing reads now that ends float.
@@ -34,17 +35,30 @@ export function toEdge(e: BoardEdge): Edge {
     type: data.kind === "link" ? "link" : "plain",
     source: e.source,
     target: e.target,
+    ariaLabel: data.kind === "link" ? linkLabel(data.label) : "Team line",
     // Ends float, so stored handle ids (old `in`/`out` too) stay in data and React Flow takes any handle.
     data,
   }
 }
 
+export const linkLabel = (label?: string) => (label ? `Link: ${label}` : "Link")
+
+// What VoiceOver calls the focused node; React Flow's default is no name at all.
+export function nodeLabel(type: string, data: Record<string, unknown>) {
+  if (ROLES.includes(type as Role))
+    return `${data.name}, ${ROLE_LABEL[type as Role]}`
+  if (type === "card") return String(data.title ?? "Card")
+  return { note: "Note", diagram: "Diagram" }[type] ?? type
+}
+
 export function toNode(n: BoardNode): Node {
+  const data = (n.data ?? {}) as Record<string, unknown>
   return {
     id: n.id,
     type: n.type,
     position: { x: n.x, y: n.y },
-    data: (n.data ?? {}) as Record<string, unknown>,
+    data,
+    ariaLabel: nodeLabel(n.type, data),
     zIndex: n.z,
     ...(n.width != null && { width: n.width }),
     ...(n.height != null && { height: n.height }),

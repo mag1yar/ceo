@@ -6,7 +6,14 @@ import {
   Position,
   useReactFlow,
 } from "@xyflow/react"
-import { memo, useEffect, useState, useSyncExternalStore } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useState,
+  useSyncExternalStore,
+} from "react"
+import { returnFocus, useEnterToEdit } from "@/features/board/keyboard"
 import { NodeHandles } from "@/features/board/NodeHandles"
 import type { DiagramNode } from "./diagram"
 import { darkScheme, renderDiagram } from "./render"
@@ -51,6 +58,9 @@ export const DiagramNodeView = memo(function DiagramNodeView({
   const { updateNodeData } = useReactFlow()
   const [draft, setDraft] = useState<string>()
   const editing = draft !== undefined
+  const edit = useCallback(() => setDraft(data.source), [data.source])
+  const [frame, setFrame] = useState<HTMLDivElement | null>(null)
+  useEnterToEdit(frame, "node", edit)
   const { svg, error } = useDiagram(
     draft ?? data.source,
     editing ? PREVIEW_DELAY : 0
@@ -62,6 +72,7 @@ export const DiagramNodeView = memo(function DiagramNodeView({
   }
   return (
     <div
+      ref={setFrame}
       className={cn(
         "group size-full rounded-lg border bg-card text-foreground shadow-xs",
         selected && "border-primary ring-1 ring-primary"
@@ -77,6 +88,7 @@ export const DiagramNodeView = memo(function DiagramNodeView({
       <NodeToolbar isVisible={editing} position={Position.Right} offset={12}>
         {editing && (
           <DiagramEditor
+            id={id}
             source={draft}
             error={error}
             onChange={setDraft}
@@ -87,7 +99,7 @@ export const DiagramNodeView = memo(function DiagramNodeView({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: double-click edits like a canvas; the textarea is the accessible editor. */}
       <div
         data-slot="diagram"
-        onDoubleClick={() => setDraft(data.source)}
+        onDoubleClick={edit}
         className="relative size-full overflow-hidden p-3"
       >
         {svg ? (
@@ -98,7 +110,7 @@ export const DiagramNodeView = memo(function DiagramNodeView({
           />
         ) : (
           <p className="grid size-full place-items-center text-xs text-muted-foreground">
-            {error && !editing ? "Could not render" : "Rendering"}
+            {error && !editing ? "Could not render" : "Rendering…"}
           </p>
         )}
         {svg && error && !editing && (
@@ -119,11 +131,13 @@ const focusEnd = (el: HTMLTextAreaElement | null) => {
 }
 
 function DiagramEditor({
+  id,
   source,
   error,
   onChange,
   onDone,
 }: {
+  id: string
   source: string
   error?: string
   onChange: (source: string) => void
@@ -136,7 +150,7 @@ function DiagramEditor({
       onBlur={(e) =>
         !e.currentTarget.contains(e.relatedTarget) && onDone(source)
       }
-      className="nodrag nopan nowheel flex w-80 origin-left flex-col gap-1.5 rounded-lg border bg-popover p-1.5 shadow-md transition-[opacity,scale] duration-(--duration-fast) ease-out starting:scale-97 starting:opacity-0 motion-reduce:starting:scale-100"
+      className="nodrag nopan nowheel flex w-80 origin-left flex-col gap-1.5 rounded-lg border bg-popover p-1.5 shadow-md transition-[opacity,scale] duration-(--duration-fast) ease-out starting:scale-90 starting:opacity-0 motion-reduce:starting:scale-100"
     >
       <textarea
         ref={focusEnd}
@@ -144,9 +158,10 @@ function DiagramEditor({
         spellCheck={false}
         value={source}
         onChange={(e) => onChange(e.currentTarget.value)}
+        // Focus goes back to the diagram, which commits through the panel's blur.
         onKeyDown={(e) =>
           (e.key === "Escape" || (e.key === "Enter" && e.metaKey)) &&
-          e.currentTarget.blur()
+          returnFocus("node", id, e.currentTarget)
         }
         className="h-56 resize-none bg-transparent px-2 py-1.5 font-mono text-xs leading-5 outline-none select-text"
       />

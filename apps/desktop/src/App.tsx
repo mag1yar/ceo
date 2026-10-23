@@ -20,6 +20,8 @@ export function App() {
   return (
     <Projects>
       <AppShell>
+        {/* First in the tab order, as it is first on screen beside the traffic lights. */}
+        <SidebarTrigger />
         <Sidebar>
           <SidebarHeader />
           <SidebarContent>
@@ -32,7 +34,6 @@ export function App() {
           </MainHeader>
           <ActiveProject />
         </Main>
-        <SidebarTrigger />
         <Commands />
       </AppShell>
     </Projects>

@@ -40,7 +40,7 @@ pub fn role_prompt(role: &str) -> &'static str {
              For each task call mcp__ceo__spawn_executor with a title, a brief with its acceptance check, and the files \
              it will touch; each executor starts off your branch. Answer their asks with mcp__ceo__reply; what you cannot \
              answer, ask the CEO with mcp__ceo__ask_ceo. When an executor reports, review its branch with \
-             `git diff <your branch>...<its branch>`; for a non-trivial change first spawn a review executor (model opus, \
+             `git diff <your branch>...<its branch>`; for a non-trivial change first spawn a review executor (the review model from the profiles below, \
              files [], brief: review that diff, report findings, change nothing). Then merge it in your worktree with \
              `git merge --no-ff <its branch>`, resolve conflicts yourself or ask the CEO, and mcp__ceo__accept the report, \
              which ends that executor. After the last merge run the gate command named in your brief on your branch and \
@@ -611,6 +611,7 @@ fn spawn_executor<R: Runtime>(
         .ok_or("the spawning node is gone")?;
     // The session runs the model it is given, else its role's profile.
     let fallback = super::profile::get(&super::profile::load(&s.dir), kind, "model");
+    let requested = model;
     let model = match model.or(fallback.as_deref()) {
         Some(m) if MODELS.contains(&m) => m,
         Some(m) => return Err(format!("model {m} is not one of {}", MODELS.join(", "))),
@@ -618,6 +619,10 @@ fn spawn_executor<R: Runtime>(
     };
     let node_id = uuid();
     let op = s.lock();
+    // Under the lock retire lists a team with, so a Lead being retired never leaves an orphan behind.
+    if retiring().contains(&ceo.id) {
+        return Err("you are being ended, so you cannot spawn anyone".into());
+    }
     // Under the lock, so two parallel spawns never both pass the check.
     let sibs = store.project_sessions(&ceo.project_id)?;
     for sib in sibs
@@ -651,7 +656,8 @@ fn spawn_executor<R: Runtime>(
             slug(title)
         ),
     )?;
-    let profile = json!({ "brief": brief, "model": model, "effort": effort, "files": files });
+    // Only an explicit model, so one set later on the node in the UI still wins over the profile.
+    let profile = json!({ "brief": brief, "model": requested, "effort": effort, "files": files });
     let started = std::fs::create_dir_all(s.session_dir(&row.id))
         .and_then(|()| {
             std::fs::write(
@@ -721,9 +727,11 @@ pub fn retire<R: Runtime>(
     why: &str,
 ) -> std::thread::JoinHandle<()> {
     let (app, why) = (app.clone(), why.to_string());
+    // Before the thread starts, so an accept that returns has already freed the executor's files.
+    let first = retiring().insert(exec.id.clone());
     std::thread::spawn(move || {
         let store = app.state::<Store>();
-        if !retiring().insert(exec.id.clone()) {
+        if !first {
             // Already ending on another thread: wait for it, so a Lead still goes after its team.
             let deadline = Instant::now() + Duration::from_secs(70);
             while Instant::now() < deadline && store.session(&exec.id).ok().flatten().is_some() {
@@ -732,9 +740,12 @@ pub fn retire<R: Runtime>(
             return;
         }
         // A Lead's team goes first, while the Lead's worktree still decides which of their branches are merged.
-        let team: Vec<_> = store
-            .project_sessions(&exec.project_id)
-            .unwrap_or_default()
+        let team: Vec<_> = {
+            let s = app.state::<Sessions>();
+            let _op = s.lock();
+            store.project_sessions(&exec.project_id).unwrap_or_default()
+        };
+        let team: Vec<_> = team
             .into_iter()
             .filter(|c| c.parent.as_deref() == Some(&exec.node_id))
             .map(|c| retire(&app, c, wait, "Its Lead ended"))

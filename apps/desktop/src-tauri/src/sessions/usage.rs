@@ -144,9 +144,13 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, row: &AgentSession, path: &str) ->
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     let mut f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
-    // A shorter file was rewritten, not appended to: read it again from the start.
-    if f.metadata().map_err(|e| e.to_string())?.len() < cur.offset {
-        cur = Cursor::default();
+    // A shorter file was rewritten, not appended to: skip what it holds, its tokens were counted already.
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    if len < cur.offset {
+        cur = Cursor {
+            offset: len,
+            ..Cursor::default()
+        };
     }
     let mut chunk = vec![];
     f.seek(SeekFrom::Start(cur.offset))

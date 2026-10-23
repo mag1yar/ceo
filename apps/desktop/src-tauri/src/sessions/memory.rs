@@ -45,6 +45,9 @@ pub fn ensure(dir: &Path) -> Res<()> {
 
 /// Commits every change as `memory: <files>`; None when nothing changed.
 pub fn commit(dir: &Path) -> Res<Option<String>> {
+    // Close Stops commit on their own threads; one at a time, or git trips over its index.lock.
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     ensure(dir)?;
     git(dir, &["add", "-A"])?;
     let files = git(dir, &["diff", "--cached", "--name-only"])?;
@@ -84,8 +87,7 @@ pub fn index(dir: &Path) -> Vec<String> {
     list
 }
 
-/// After an accepted report: with no child left and nothing unaccepted, the wave is over, so the CEO
-/// is cleared once it sits idle at an empty prompt, and the prime on its SessionStart reloads the memory.
+/// No child left and nothing unaccepted ends the wave: the idle CEO is cleared and its prime reloads memory.
 pub fn wave_end<R: Runtime>(app: &AppHandle<R>, exec: &AgentSession, accepted: bool) {
     let store = app.state::<Store>();
     let Ok(Some(ceo)) = store.node_session(&exec.project_id, exec.parent.as_deref().unwrap_or(""))
